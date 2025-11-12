@@ -1,18 +1,13 @@
 from __future__ import annotations
 
-import io
+import inspect
 import json
 import logging
-import inspect
 from typing import Optional
-
-from email.parser import BytesParser
-from email.policy import default as email_default_policy
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
-from starlette.datastructures import Headers
 
 from ..db import get_session
 from ..models import Attachment
@@ -20,6 +15,7 @@ from ..schemas import UploadAttachmentResponse, UploadMetadataResponse
 from ..services.orders import ensure_order, update_enriched_json
 from ..services.storage import save_upload_file
 from ..utils.parsing import extract_external_id
+from ..utils.multipart import parse_multipart_body
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +85,7 @@ async def _dispatch_upload(
         if project_data_raw is None and file is None:
             body = await request.body()
             if body:
-                parsed = _parse_multipart_body(body, request.headers.get("content-type", ""))
+                parsed = parse_multipart_body(body, request.headers.get("content-type", ""))
                 val = parsed.get("projectData")
                 if isinstance(val, str):
                     project_data_raw = val
@@ -110,6 +106,8 @@ async def _dispatch_upload(
                 if isinstance(fn, str):
                     filename = fn
                 fv = parsed.get("file")
+                if isinstance(fv, list):
+                    fv = next((item for item in fv if isinstance(item, UploadFile)), None)
                 if isinstance(fv, UploadFile):
                     file = fv
 
@@ -169,38 +167,6 @@ async def _dispatch_upload(
         return _handle_metadata(session, project_data_raw)
 
     raise HTTPException(status_code=400, detail="Invalid request: nothing to process")
-
-
-def _parse_multipart_body(body: bytes, content_type_header: str) -> dict[str, object]:
-    """
-    Ручной парсер multipart (без python-multipart).
-    Возвращает строки и UploadFile (в памяти) для частей с filename.
-    """
-    header = f"Content-Type: {content_type_header}\r\n\r\n".encode("utf-8")
-    message = BytesParser(policy=email_default_policy).parsebytes(header + body)
-    parsed: dict[str, object] = {}
-    for part in message.iter_parts():
-        if part.get_content_disposition() != "form-data":
-            continue
-        name = part.get_param("name", header="content-disposition")
-        if not name:
-            continue
-        filename = part.get_filename()
-        payload = part.get_payload(decode=True) or b""
-        if filename:
-            headers = Headers(
-                {
-                    "content-disposition": part["Content-Disposition"],
-                    "content-type": part.get_content_type(),
-                }
-            )
-            upload = UploadFile(file=io.BytesIO(payload), filename=filename, headers=headers)
-            parsed[name] = upload
-        else:
-            charset = part.get_content_charset() or "utf-8"
-            parsed[name] = payload.decode(charset, errors="replace")
-    return parsed
-
 
 def _handle_metadata(session: Session, project_data_raw: str) -> UploadMetadataResponse:
     if not project_data_raw:
