@@ -4,13 +4,15 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
+from starlette.datastructures import FormData
 
 from ..config import Settings, get_settings
 from ..db import get_session
 from ..schemas import UserAttachmentOut, UserCreateResponse, UserDetail, UserPatch
 from ..services import users as users_service
+from ..utils.multipart import parse_multipart_body
 
 logger = logging.getLogger(__name__)
 
@@ -94,10 +96,79 @@ def patch_user_endpoint(
 )
 async def upload_user_files_endpoint(
         uid: UUID,
-        files: list[UploadFile] = File(...),  # ВАЖНО: имя поля должно быть 'files'
+        request: Request,
         session: Session = Depends(get_session),
         settings: Settings = Depends(get_settings),
 ) -> list[UserAttachmentOut]:
-    attachments = users_service.add_user_attachments(session, uid, files, settings)
+    uploads = await _extract_uploads_from_request(request)
+    if not uploads:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    attachments = users_service.add_user_attachments(session, uid, uploads, settings)
     logger.info("Uploaded user files", extra={"user_uid": str(uid), "count": len(attachments)})
     return [UserAttachmentOut.model_validate(item, from_attributes=True) for item in attachments]
+
+
+@router.post("/_debug/echo-multipart")
+async def echo_multipart_debug_endpoint(
+        request: Request,
+) -> list[dict[str, int | str]]:
+    uploads = await _extract_uploads_from_request(request)
+    response: list[dict[str, int | str]] = []
+    for upload in uploads:
+        content = await upload.read()
+        response.append({
+            "name": upload.filename,
+            "size": len(content),
+        })
+        await upload.seek(0)
+    return response
+
+
+async def _extract_uploads_from_request(request: Request) -> list[UploadFile]:
+    """Return uploaded files handling both ``files`` and ``files[]`` field names."""
+
+    content_type = (request.headers.get("content-type") or "").lower()
+    if "multipart/form-data" not in content_type:
+        return []
+
+    uploads: list[UploadFile] = []
+    form: FormData | None = None
+
+    try:
+        form = await request.form()
+    except Exception as exc:  # pragma: no cover - logging aid
+        logger.warning("request.form() failed for user upload: %s", exc)
+
+    if form is not None:
+        uploads.extend(_uploads_from_form(form, "files"))
+        uploads.extend(_uploads_from_form(form, "files[]"))
+        if uploads:
+            return uploads
+
+    body = await request.body()
+    if not body:
+        return []
+
+    parsed = parse_multipart_body(body, request.headers.get("content-type", ""))
+    uploads.extend(_uploads_from_mapping(parsed, "files"))
+    uploads.extend(_uploads_from_mapping(parsed, "files[]"))
+
+    if uploads and form is not None:
+        logger.debug("Used fallback multipart parser for user upload; request.form() returned no files")
+
+    return uploads
+
+
+def _uploads_from_form(form: FormData, key: str) -> list[UploadFile]:
+    values = form.getlist(key) if hasattr(form, "getlist") else []
+    return [item for item in values if isinstance(item, UploadFile)]
+
+
+def _uploads_from_mapping(parsed: dict[str, Any], key: str) -> list[UploadFile]:
+    value = parsed.get(key)
+    if isinstance(value, UploadFile):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, UploadFile)]
+    return []
