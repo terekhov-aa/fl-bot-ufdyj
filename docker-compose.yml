@@ -1,0 +1,35 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: fl_ingest
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+
+  web:
+    build: .
+#    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    volumes:
+      - .:/app
+#      - ./uploads:/app/uploads
+    ports:
+      - "8000:8000"
+    command: >
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      PYTHONUNBUFFERED: "1"
+      PYCHARM_DEBUG: "1"
+      PYTHONPATH: /app     # не обязательно, но полезно явно
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:
