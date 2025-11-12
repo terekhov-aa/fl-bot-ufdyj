@@ -4,7 +4,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Body, Depends, HTTPException, File, UploadFile
 from sqlalchemy.orm import Session
 
 from ..config import Settings, get_settings
@@ -94,10 +94,36 @@ def patch_user_endpoint(
 )
 async def upload_user_files_endpoint(
         uid: UUID,
-        files: list[UploadFile] = File(...),  # ВАЖНО: имя поля должно быть 'files'
+        files: list[UploadFile] | None = File(default=None),
+        files_brackets: list[UploadFile] | None = File(default=None, alias="files[]"),
         session: Session = Depends(get_session),
         settings: Settings = Depends(get_settings),
 ) -> list[UserAttachmentOut]:
-    attachments = users_service.add_user_attachments(session, uid, files, settings)
+    uploads: list[UploadFile] = []
+    if files:
+        uploads.extend(files)
+    if files_brackets:
+        uploads.extend(files_brackets)
+    if not uploads:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    attachments = users_service.add_user_attachments(session, uid, uploads, settings)
     logger.info("Uploaded user files", extra={"user_uid": str(uid), "count": len(attachments)})
     return [UserAttachmentOut.model_validate(item, from_attributes=True) for item in attachments]
+
+
+@router.post("/_debug/echo-multipart")
+async def echo_multipart_debug_endpoint(
+        files: list[UploadFile] | None = File(default=None),
+        files_brackets: list[UploadFile] | None = File(default=None, alias="files[]"),
+) -> list[dict[str, int | str]]:
+    uploads = (files or []) + (files_brackets or [])
+    response: list[dict[str, int | str]] = []
+    for upload in uploads:
+        content = await upload.read()
+        response.append({
+            "name": upload.filename,
+            "size": len(content),
+        })
+        await upload.seek(0)
+    return response
