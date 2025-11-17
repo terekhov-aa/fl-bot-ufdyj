@@ -41,6 +41,10 @@
 | `RSS_SUBCATEGORY` | Дополнительный фильтр `subcategory` (опционально).              |
 | `UPLOAD_DIR`      | Абсолютный путь для сохранения вложений.                        |
 | `MAX_UPLOAD_MB`   | Максимальный размер загружаемого файла в мегабайтах.            |
+| `BROWSERBASE_API_KEY` | API-ключ Browserbase для Stagehand.                         |
+| `BROWSERBASE_PROJECT_ID` | Идентификатор проекта Browserbase.                       |
+| `MODEL_API_KEY`   | Ключ LLM, используемый Stagehand (OpenAI/Gemini и др.).         |
+| `STAGEHAND_MODEL_NAME` | Имя модели для Stagehand (например, `gpt-4o`).            |
 
 ## Тесты
 
