@@ -30,7 +30,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
-from .routes import ingest, orders, upload, feedbacks
+from .routes import debug_browserbase, ingest, orders, upload, feedbacks
 from .routers import users
 from .utils.parsing import extract_external_id
 
@@ -74,6 +74,7 @@ app.include_router(upload.router)
 app.include_router(orders.router)
 app.include_router(users.router)
 app.include_router(feedbacks.router)
+app.include_router(debug_browserbase.router)
 
 
 @app.on_event("startup")
