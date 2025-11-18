@@ -123,3 +123,16 @@ class OrderFeedbackListResponse(BaseModel):
     items: list[OrderFeedbackResponse]
     limit: int
     offset: int
+
+
+class ParseSiteRequest(BaseModel):
+    url: str
+    instruction: Optional[str] = None
+    schema_: Optional[dict[str, Any]] = Field(default=None, alias="schema")
+    options: Optional[dict[str, Any]] = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ParseSiteResponse(BaseModel):
+    result: dict[str, Any]
