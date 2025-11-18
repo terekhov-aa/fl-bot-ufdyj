@@ -41,6 +41,19 @@
 | `RSS_SUBCATEGORY` | Дополнительный фильтр `subcategory` (опционально).              |
 | `UPLOAD_DIR`      | Абсолютный путь для сохранения вложений.                        |
 | `MAX_UPLOAD_MB`   | Максимальный размер загружаемого файла в мегабайтах.            |
+| `STAGEHAND_SERVICE_URL` | Базовый URL Node-сервиса Stagehand (например, `http://stagehand-service:3000`). |
+| `BROWSERBASE_API_KEY` | API-ключ Browserbase для Stagehand. |
+| `BROWSERBASE_PROJECT_ID` | Идентификатор проекта Browserbase. |
+| `MODEL_API_KEY` | API-ключ модели, используемой Stagehand. |
+| `STAGEHAND_API_URL` | URL API Stagehand. |
+| `STAGEHAND_MODEL_NAME` | Имя модели для Stagehand (по умолчанию `gpt-4o`). |
+
+## Stagehand Node сервис
+
+- Код сервиса: `stagehand-node-service/` (TypeScript + Express).
+- Основной эндпоинт: `POST /stagehand/extract` — принимает `url`, `instruction`, `schema`, `options` и возвращает JSON от Stagehand.
+- Для локального запуска: `npm install` и `npm run dev` внутри директории сервиса.
+- В Docker-сборке сервис подключается как `stagehand-service` (порт 3000) и доступен из Python по `STAGEHAND_SERVICE_URL`.
 
 ## Тесты
 
@@ -77,6 +90,13 @@ pytest
    curl http://localhost:8000/api/orders/5468413
    ```
 
+5. Распарсить сайт через Stagehand:
+   ```bash
+   curl -X POST http://localhost:8000/api/parse-site \\
+     -H "Content-Type: application/json" \\
+     -d '{"url":"https://example.com","instruction":"Extract main content"}'
+   ```
+
 ## Структура проекта
 
 ```
@@ -107,6 +127,13 @@ migrations/
     202405010001_create_orders_and_attachments.py
 uploads/
   .gitkeep
+stagehand-node-service/
+  Dockerfile
+  package.json
+  tsconfig.json
+  src/
+    server.ts
+    stagehandClient.ts
 Dockerfile
 docker-compose.yml
 requirements.txt
