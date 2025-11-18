@@ -12,6 +12,23 @@ services:
       - "5432:5432"
     volumes:
       - ./postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+
+  stagehand:
+    build: ./stagehand_service
+    container_name: stagehand-service
+    env_file: .env
+    environment:
+      - BROWSERBASE_API_KEY=${BROWSERBASE_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - BROWSERBASE_PROJECT_ID=${BROWSERBASE_PROJECT_ID}
+      - STAGEHAND_MODEL=${STAGEHAND_MODEL}
+      - PORT=3000
+    ports:
+      - "3001:3000"
+    networks:
+      - backend
 
   web:
     build: .
@@ -28,8 +45,15 @@ services:
       PYTHONUNBUFFERED: "1"
       PYCHARM_DEBUG: "1"
       PYTHONPATH: /app     # не обязательно, но полезно явно
+      STAGEHAND_SERVICE_URL: ${STAGEHAND_SERVICE_URL:-http://stagehand:3000}
     depends_on:
       - db
+      - stagehand
+    networks:
+      - backend
 
 volumes:
   postgres_data:
+
+networks:
+  backend:
