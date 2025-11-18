@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     rss_subcategory: Optional[int] = None
     upload_dir: Path = Field(default=Path("/app/uploads"))
     max_upload_mb: int = Field(default=250)
+    stagehand_service_url: str = Field(default="http://stagehand:3000")
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -42,6 +43,11 @@ class Settings(BaseSettings):
         if value <= 0:
             raise ValueError("MAX_UPLOAD_MB must be greater than zero")
         return value
+
+    @field_validator("stagehand_service_url", mode="after")
+    @classmethod
+    def _strip_trailing_slash(cls, value: str) -> str:
+        return value.rstrip("/")
 
 
 class RSSIngestOptions(BaseModel):
