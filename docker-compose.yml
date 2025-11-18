@@ -31,5 +31,19 @@ services:
     depends_on:
       - db
 
+  stagehand-service:
+    build: ./stagehand-node-service
+    environment:
+      BROWSERBASE_API_KEY: ${BROWSERBASE_API_KEY}
+      BROWSERBASE_PROJECT_ID: ${BROWSERBASE_PROJECT_ID}
+      MODEL_API_KEY: ${MODEL_API_KEY}
+      STAGEHAND_API_URL: ${STAGEHAND_API_URL}
+      STAGEHAND_MODEL_NAME: ${STAGEHAND_MODEL_NAME}
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - db
+
 volumes:
   postgres_data:

@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     rss_subcategory: Optional[int] = None
     upload_dir: Path = Field(default=Path("/app/uploads"))
     max_upload_mb: int = Field(default=250)
+    stagehand_service_url: str = Field(default="http://stagehand-service:3000")
 
     model_config = SettingsConfigDict(
         env_file=".env",
