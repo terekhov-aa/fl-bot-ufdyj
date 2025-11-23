@@ -1,0 +1,23 @@
+{
+  "name": "fl-bot-ufdyj",
+  "version": "1.0.0",
+  "description": "Сервис агрегирует заказы с FL.ru: получает их из RSS, обогащает данными от браузерного расширения и предоставляет объединённое API.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.6.8",
+    "cheerio": "^1.0.0-rc.12",
+    "express": "^4.18.2",
+    "puppeteer": "^22.15.0"
+  }
+}
