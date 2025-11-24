@@ -30,6 +30,17 @@ services:
       PYTHONPATH: /app     # не обязательно, но полезно явно
     depends_on:
       - db
+      - link-analyzer
+
+  link-analyzer:
+    build: ./link_analyzer
+    container_name: link-analyzer
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: ${PORT:-3000}
+    ports:
+      - "3000:3000"
 
 volumes:
   postgres_data:
