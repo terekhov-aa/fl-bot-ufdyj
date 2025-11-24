@@ -16,12 +16,12 @@ async function extractProjectInfoFromText(text) {
       {
         role: 'system',
         content:
-          'You are an assistant that extracts structured project details from arbitrary text. Respond with JSON matching the requested schema.',
+          'You are an assistant that extracts structured project details from arbitrary text. The text may be a full web page or a scraped UI of design/project tools (Figma, Miro, Canva, Whimsical, Google Stitch, etc.). Use file or project names, visible frame/page names, and short labels to infer the project, but stay high-level and avoid inventing detailed copy.',
       },
       {
         role: 'user',
         content:
-          'Extract project info: projectType, summary, targetAudience, mainFlows (array), mainFeatures (array), techStackGuess (array), complexity (low/medium/high/unknown), risks (array), tasksForFreelancer (array) from the following text. Return strict JSON.',
+          'From the provided text, output JSON with fields: projectType, summary, targetAudience, mainFlows (array), mainFeatures (array), techStackGuess (array), complexity (low/medium/high/unknown), risks (array), tasksForFreelancer (array). The text may contain only partial UI labels or metadata from design tools, so keep assumptions cautious and avoid hallucinating exact wording. Return only strict JSON.',
       },
       { role: 'user', content: trimmed },
     ],
