@@ -4,12 +4,20 @@ const ProjectInfo = require('../models/ProjectInfo');
 const { truncateText } = require('../utils/textUtils');
 const logger = require('../utils/logger');
 
-async function extractProjectInfoFromText(text) {
+async function extractProjectInfoFromText(text, context = {}) {
   if (!config.llmApiKey) {
     logger.warn('LLM_API_KEY is not configured; skipping LLM extraction');
     return null;
   }
   const trimmed = truncateText(text, 8000);
+  const contextParts = [];
+  if (context.url) contextParts.push(`URL: ${context.url}`);
+  if (context.contentType) contextParts.push(`Content type: ${context.contentType}`);
+  if (context.source) contextParts.push(`Source: ${context.source}`);
+
+  const userInstruction =
+    'Extract project info: projectType, summary, targetAudience, mainFlows (array), mainFeatures (array), techStackGuess (array), complexity (low/medium/high/unknown), risks (array), tasksForFreelancer (array) from the following text. Return strict JSON.';
+
   const payload = {
     model: config.llmModel,
     messages: [
@@ -20,8 +28,7 @@ async function extractProjectInfoFromText(text) {
       },
       {
         role: 'user',
-        content:
-          'Extract project info: projectType, summary, targetAudience, mainFlows (array), mainFeatures (array), techStackGuess (array), complexity (low/medium/high/unknown), risks (array), tasksForFreelancer (array) from the following text. Return strict JSON.',
+        content: `${userInstruction}${contextParts.length ? `\nContext: ${contextParts.join('; ')}` : ''}`,
       },
       { role: 'user', content: trimmed },
     ],

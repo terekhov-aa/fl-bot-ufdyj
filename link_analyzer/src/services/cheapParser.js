@@ -1,20 +1,47 @@
 const axios = require('axios');
+const cheerio = require('cheerio');
 const ParsedPage = require('../models/ParsedPage');
 const { extractTextFromHtml } = require('./htmlParser');
 const { fetchGoogleDoc } = require('./googleDocParser');
 const logger = require('../utils/logger');
 
-async function cheapParse(rawUrl, contentType) {
+function collectSignalsFromHtml(html, parsedContent) {
+  const $ = cheerio.load(html || '');
+  return {
+    htmlLength: typeof html === 'string' ? html.length : 0,
+    textLength: parsedContent ? parsedContent.length : 0,
+    canvasCount: $('canvas').length,
+    svgCount: $('svg').length,
+    iframeCount: $('iframe').length,
+    imgCount: $('img').length,
+    linkCount: $('a').length,
+    inputCount: $('input,button,select,textarea').length,
+  };
+}
+
+async function cheapParseWithSignals(rawUrl, contentType) {
   const limitations = [];
   const errors = [];
+
   if (contentType === 'google_doc') {
     try {
       const content = await fetchGoogleDoc(rawUrl);
-      return { parsed: new ParsedPage({ url: rawUrl, content }), limitations, errors };
+      const parsed = new ParsedPage({ url: rawUrl, content });
+      const signals = {
+        htmlLength: content ? content.length : 0,
+        textLength: content ? content.length : 0,
+        canvasCount: 0,
+        svgCount: 0,
+        iframeCount: 0,
+        imgCount: 0,
+        linkCount: 0,
+        inputCount: 0,
+      };
+      return { parsed, signals, limitations, errors };
     } catch (error) {
       errors.push('Failed to fetch Google Doc');
       logger.error(`Google Doc parsing failed: ${error.message}`);
-      return { parsed: null, limitations, errors };
+      return { parsed: null, signals: {}, limitations, errors };
     }
   }
 
@@ -37,7 +64,8 @@ async function cheapParse(rawUrl, contentType) {
       statusCode: response.status,
       contentLength: Number(response.headers['content-length']) || null,
     });
-    return { parsed, limitations, errors };
+    const signals = collectSignalsFromHtml(html, parsed.content);
+    return { parsed, signals, limitations, errors };
   } catch (error) {
     logger.error(`Cheap parse failed for ${rawUrl}: ${error.message}`);
     errors.push('Cheap parser failed');
@@ -46,8 +74,13 @@ async function cheapParse(rawUrl, contentType) {
     } else if (error.code === 'ECONNABORTED') {
       limitations.push('Request timeout');
     }
-    return { parsed: null, limitations, errors };
+    return { parsed: null, signals: {}, limitations, errors };
   }
 }
 
-module.exports = { cheapParse };
+async function cheapParse(rawUrl, contentType) {
+  const { parsed, limitations, errors } = await cheapParseWithSignals(rawUrl, contentType);
+  return { parsed, limitations, errors };
+}
+
+module.exports = { cheapParse, cheapParseWithSignals };
