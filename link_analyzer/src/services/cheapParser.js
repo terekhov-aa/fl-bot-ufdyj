@@ -29,6 +29,13 @@ async function cheapParse(rawUrl, contentType) {
     });
     const html = response.data;
     const meta = extractTextFromHtml(html);
+    if (meta.textDensity !== null && meta.textDensity < 0.01) {
+      limitations.push('low_text_density');
+    }
+    if (meta.suspectedCanvasApp) {
+      limitations.push('likely_canvas_app');
+    }
+
     const parsed = new ParsedPage({
       url: rawUrl,
       title: meta.title,
@@ -36,6 +43,13 @@ async function cheapParse(rawUrl, contentType) {
       content: meta.content,
       statusCode: response.status,
       contentLength: Number(response.headers['content-length']) || null,
+      htmlLength: meta.htmlLength,
+      textLength: meta.textLength,
+      textDensity: meta.textDensity,
+      canvasCount: meta.canvasCount,
+      svgCount: meta.svgCount,
+      inputControlCount: meta.inputControlCount,
+      suspectedCanvasApp: meta.suspectedCanvasApp,
     });
     return { parsed, limitations, errors };
   } catch (error) {
