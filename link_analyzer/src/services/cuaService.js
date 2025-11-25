@@ -1,8 +1,7 @@
 // FILE: link_analyzer/src/services/cuaService.js
-const axios = require('axios');
+const { Stagehand } = require('@browserbasehq/stagehand');
 const puppeteer = require('puppeteer');
 const ParsedPage = require('../models/ParsedPage');
-const ProjectInfo = require('../models/ProjectInfo');
 const { extractTextFromHtml } = require('./htmlParser');
 const config = require('../config');
 const logger = require('../utils/logger');
@@ -58,84 +57,101 @@ async function runCUAForProjectInfo(url, options = {}) {
   let projectInfoFromCUA = null;
   let projectInfoText = null;
 
-  try {
-    const hasBrowserbaseConfig =
-      config.useBrowserbaseForCua &&
-      config.browserbaseApiKey &&
-      config.browserbaseProjectId &&
-      config.cuaBaseUrl &&
-      config.cuaModel &&
-      config.cuaApiKey;
+  const hasBrowserbaseConfig =
+    config.useBrowserbaseForCua &&
+    config.browserbaseApiKey &&
+    config.browserbaseProjectId;
 
-    if (hasBrowserbaseConfig) {
-      try {
-        const response = await axios.post(
-          `${config.cuaBaseUrl}/analyze`,
+  if (hasBrowserbaseConfig) {
+    try {
+      const stagehand = new Stagehand({
+        apiKey: config.browserbaseApiKey,
+        projectId: config.browserbaseProjectId,
+        model: config.cuaModel || config.llmModel,
+      });
+
+      const runResult = await stagehand.run({
+        url,
+        cua: true,
+        maxSteps: config.cuaMaxSteps,
+        maxTokens: config.cuaMaxTokens,
+        metadata: options.signals || {},
+        instructions: `
+          Ты агент, который анализирует продукт/проект по веб-интерфейсу.
+          1. Прокликай и проскроль страницу, чтобы понять, что это за продукт.
+          2. Сформируй JSON со следующей структурой:
           {
-            url,
-            model: config.cuaModel,
-            maxSteps: config.cuaMaxSteps,
-            maxTokens: config.cuaMaxTokens,
-            browserbase: {
-              apiKey: config.browserbaseApiKey,
-              projectId: config.browserbaseProjectId,
+            "projectInfo": {
+              "projectType": string,
+              "summary": string,
+              "targetAudience": string,
+              "mainFlows": string[],
+              "mainFeatures": string[],
+              "techStackGuess": string[],
+              "complexity": "low" | "medium" | "high" | "unknown",
+              "risks": string[],
+              "tasksForFreelancer": string[]
             },
-            signals: options.signals || {},
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${config.cuaApiKey}`,
-              'Content-Type': 'application/json',
-            },
-            timeout: 30000,
+            "textSummary": string,
+            "rawText": string,
+            "title": string,
+            "description": string
           }
-        );
+          Верни ТОЛЬКО JSON без лишнего текста.
+        `,
+      });
 
-        const data = response.data || {};
-        if (data.projectInfo) {
-          const mappedProject = new ProjectInfo();
-          Object.assign(mappedProject, data.projectInfo);
-          projectInfoFromCUA = mappedProject;
+      const outputText = runResult?.outputText || runResult?.output || runResult?.text || '';
+      let data = {};
+      if (outputText && typeof outputText === 'string') {
+        try {
+          data = JSON.parse(outputText);
+        } catch (e) {
+          limitations.push('Stagehand returned non-JSON output');
+          errors.push(`Browserbase CUA parse error: ${e.message}`);
         }
-        projectInfoText = data.textSummary || data.rawText || null;
-        if (data.rawText) {
-          parsedPageFromCUA = new ParsedPage({
-            url,
-            title: data.title || '',
-            description: data.description || '',
-            content: data.rawText,
-            statusCode: 200,
-            contentLength: data.rawText.length,
-          });
-        }
-        if (!data.projectInfo && !data.rawText) {
-          limitations.push('Browserbase/Stagehand CUA returned no data');
-        }
-      } catch (err) {
-        errors.push(`Browserbase/Stagehand CUA error: ${err.message}`);
-        limitations.push('Browserbase/Stagehand CUA integration issue, falling back to Puppeteer');
       }
-    } else {
-      limitations.push('Browserbase CUA not fully configured, using Puppeteer fallback');
-    }
 
-    if (!parsedPageFromCUA && config.cuaGloballyEnabled) {
-      try {
-        const html = await renderWithPuppeteer(url);
-        const meta = extractTextFromHtml(html);
+      if (data.rawText) {
         parsedPageFromCUA = new ParsedPage({
           url,
-          title: meta.title,
-          description: meta.description,
-          content: meta.content,
+          title: data.title || '',
+          description: data.description || '',
+          content: data.rawText,
+          statusCode: 200,
+          contentLength: data.rawText.length,
         });
-      } catch (err) {
-        limitations.push('Puppeteer fallback failed');
-        errors.push(`CUA error: ${err.message}`);
       }
+
+      if (data.textSummary) {
+        projectInfoText = data.textSummary;
+      }
+
+      if (!data.rawText && !data.textSummary) {
+        limitations.push('Browserbase/Stagehand CUA returned no usable data');
+      }
+    } catch (err) {
+      limitations.push('Browserbase/Stagehand CUA failed');
+      errors.push(`Browserbase CUA error: ${err.message}`);
     }
-  } catch (error) {
-    errors.push(`CUA error: ${error.message || String(error)}`);
+  } else {
+    limitations.push('Browserbase CUA not fully configured, using Puppeteer fallback');
+  }
+
+  if (!parsedPageFromCUA && config.cuaGloballyEnabled) {
+    try {
+      const html = await renderWithPuppeteer(url);
+      const meta = extractTextFromHtml(html);
+      parsedPageFromCUA = new ParsedPage({
+        url,
+        title: meta.title,
+        description: meta.description,
+        content: meta.content,
+      });
+    } catch (err) {
+      limitations.push('Puppeteer fallback failed');
+      errors.push(`CUA error: ${err.message}`);
+    }
   }
 
   return {
