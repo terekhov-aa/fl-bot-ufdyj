@@ -55,6 +55,7 @@ async function analyzeUrl(url) {
 
     if (decision.mode === 'need_cua') {
       result.analysisMode = config.cuaGloballyEnabled ? 'cua' : 'cheap_parser';
+      logger.info('Invoking Stagehand CUA workflow', { model: config.cuaModel, signals });
       const cuaOutcome = await runCUAForProjectInfo(url, { contentType, signals });
       result.limitations.push(...cuaOutcome.limitations);
       result.errors.push(...cuaOutcome.errors);

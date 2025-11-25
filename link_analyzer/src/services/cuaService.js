@@ -1,43 +1,8 @@
 // FILE: link_analyzer/src/services/cuaService.js
-const axios = require('axios');
-const puppeteer = require('puppeteer');
+const { Stagehand } = require('@browserbasehq/stagehand');
 const ParsedPage = require('../models/ParsedPage');
-const ProjectInfo = require('../models/ProjectInfo');
-const { extractTextFromHtml } = require('./htmlParser');
 const config = require('../config');
 const logger = require('../utils/logger');
-
-async function renderWithPuppeteer(rawUrl) {
-  let browser;
-  try {
-    browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox', '--disable-setuid-sandbox'] });
-    const page = await browser.newPage();
-    await page.goto(rawUrl, { waitUntil: 'networkidle2', timeout: 20000 });
-    const html = await page.content();
-    return html;
-  } finally {
-    if (browser) {
-      await browser.close();
-    }
-  }
-}
-
-async function analyzeWithCua(rawUrl, contentType, limitations = []) {
-  if (!config.cuaGloballyEnabled) {
-    limitations.push('CUA disabled');
-    return { parsed: null, used: false };
-  }
-  try {
-    const html = await renderWithPuppeteer(rawUrl);
-    const meta = extractTextFromHtml(html);
-    const parsed = new ParsedPage({ url: rawUrl, title: meta.title, description: meta.description, content: meta.content });
-    return { parsed, used: true };
-  } catch (error) {
-    logger.error(`CUA analysis failed: ${error.message}`);
-    limitations.push('CUA failed');
-    return { parsed: null, used: true };
-  }
-}
 
 /**
  * @param {string} url
@@ -57,85 +22,82 @@ async function runCUAForProjectInfo(url, options = {}) {
   let parsedPageFromCUA = null;
   let projectInfoFromCUA = null;
   let projectInfoText = null;
+  let stagehand;
+
+  if (!config.browserbaseApiKey || !config.browserbaseProjectId) {
+    limitations.push('Browserbase credentials missing for CUA');
+    return { parsedPageFromCUA, projectInfoFromCUA, projectInfoText, limitations, errors };
+  }
 
   try {
-    const hasBrowserbaseConfig =
-      config.useBrowserbaseForCua &&
-      config.browserbaseApiKey &&
-      config.browserbaseProjectId &&
-      config.cuaBaseUrl &&
-      config.cuaModel &&
-      config.cuaApiKey;
+    logger.info('Launching Stagehand CUA', { model: config.cuaModel, signals: options.signals });
 
-    if (hasBrowserbaseConfig) {
-      try {
-        const response = await axios.post(
-          `${config.cuaBaseUrl}/analyze`,
-          {
-            url,
-            model: config.cuaModel,
-            maxSteps: config.cuaMaxSteps,
-            maxTokens: config.cuaMaxTokens,
-            browserbase: {
-              apiKey: config.browserbaseApiKey,
-              projectId: config.browserbaseProjectId,
-            },
-            signals: options.signals || {},
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${config.cuaApiKey}`,
-              'Content-Type': 'application/json',
-            },
-            timeout: 30000,
-          }
-        );
+    stagehand = new Stagehand({
+      env: 'BROWSERBASE',
+      apiKey: config.browserbaseApiKey,
+      projectId: config.browserbaseProjectId,
+    });
 
-        const data = response.data || {};
-        if (data.projectInfo) {
-          const mappedProject = new ProjectInfo();
-          Object.assign(mappedProject, data.projectInfo);
-          projectInfoFromCUA = mappedProject;
-        }
-        projectInfoText = data.textSummary || data.rawText || null;
-        if (data.rawText) {
-          parsedPageFromCUA = new ParsedPage({
-            url,
-            title: data.title || '',
-            description: data.description || '',
-            content: data.rawText,
-            statusCode: 200,
-            contentLength: data.rawText.length,
-          });
-        }
-        if (!data.projectInfo && !data.rawText) {
-          limitations.push('Browserbase/Stagehand CUA returned no data');
-        }
-      } catch (err) {
-        errors.push(`Browserbase/Stagehand CUA error: ${err.message}`);
-        limitations.push('Browserbase/Stagehand CUA integration issue, falling back to Puppeteer');
-      }
-    } else {
-      limitations.push('Browserbase CUA not fully configured, using Puppeteer fallback');
+    await stagehand.init();
+
+    const page = stagehand.page || (stagehand.context && stagehand.context.pages()[0]);
+
+    if (!page) {
+      throw new Error('Stagehand page not available');
     }
 
-    if (!parsedPageFromCUA && config.cuaGloballyEnabled) {
+    await page.goto(url, { waitUntil: 'networkidle' });
+
+    const agent = stagehand.agent({
+      cua: true,
+      model: config.cuaModel || 'google/gemini-2.5-computer-use-preview-10-2025',
+      systemPrompt:
+        'You are a helpful assistant that can control a web browser and read product/project pages. Focus on extracting as much textual context as possible for a freelancer who will build or maintain this project.',
+      maxSteps: config.cuaMaxSteps,
+      maxOutputTokens: config.cuaMaxTokens,
+    });
+
+    const instruction =
+      'You are currently on a page that describes some product or project. Carefully scroll and inspect the page. Then return a long, dense plain-text summary of everything that is important: what this project is, target audience, main flows, main features, tech stack hints, complexity, risks, and tasks for a freelancer. Do not return JSON, only a single plain-text block.';
+
+    const agentResult = await agent.execute(instruction);
+
+    const text =
+      typeof agentResult === 'string'
+        ? agentResult
+        : agentResult?.message || agentResult?.output || '';
+
+    if (!text) {
+      limitations.push('CUA agent returned empty message');
+    }
+
+    if (agentResult && agentResult.success === false) {
+      limitations.push('CUA agent reported unsuccessful execution');
+    }
+
+    if (text) {
+      parsedPageFromCUA = new ParsedPage({
+        url,
+        title: (await page.title().catch(() => '')) || '',
+        description: '',
+        content: text,
+        statusCode: 200,
+        contentLength: text.length,
+      });
+      projectInfoText = text;
+    }
+  } catch (err) {
+    limitations.push('Stagehand CUA failed');
+    errors.push(`CUA error: ${err.message}`);
+    logger.error(`CUA error: ${err.message}`);
+  } finally {
+    if (stagehand) {
       try {
-        const html = await renderWithPuppeteer(url);
-        const meta = extractTextFromHtml(html);
-        parsedPageFromCUA = new ParsedPage({
-          url,
-          title: meta.title,
-          description: meta.description,
-          content: meta.content,
-        });
-      } catch (err) {
-        limitations.push('Puppeteer fallback failed');
-        errors.push(`CUA error: ${err.message}`);
+        await stagehand.close();
+      } catch (closeError) {
+        logger.error(`Failed to close Stagehand: ${closeError.message}`);
       }
     }
-  } catch (error) {
-    errors.push(`CUA error: ${error.message || String(error)}`);
   }
 
   return {
@@ -148,6 +110,5 @@ async function runCUAForProjectInfo(url, options = {}) {
 }
 
 module.exports = {
-  analyzeWithCua,
   runCUAForProjectInfo,
 };
