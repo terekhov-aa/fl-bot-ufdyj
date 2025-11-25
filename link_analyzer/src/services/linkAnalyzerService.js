@@ -66,6 +66,7 @@ async function analyzeUrl(url) {
         result.projectInfo = cuaOutcome.projectInfoFromCUA;
       }
 
+      let usedLlmAfterCua = false;
       if (!result.projectInfo) {
         const contentForLLM =
           (cuaOutcome.projectInfoText && cuaOutcome.projectInfoText.trim()) ||
@@ -80,11 +81,20 @@ async function analyzeUrl(url) {
           });
           if (projectInfo) {
             result.projectInfo = projectInfo;
+            usedLlmAfterCua = true;
           } else {
             result.limitations.push('LLM extraction unavailable');
           }
         } else {
           result.limitations.push('No content available for project extraction');
+        }
+      }
+
+      if (config.cuaGloballyEnabled) {
+        if (cuaOutcome.projectInfoFromCUA) {
+          result.analysisMode = 'cua_direct_project_info';
+        } else if (usedLlmAfterCua) {
+          result.analysisMode = 'cua+llm';
         }
       }
       result.limitations.push(...decision.reasons);

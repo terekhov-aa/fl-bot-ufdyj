@@ -1,6 +1,8 @@
 // FILE: link_analyzer/src/services/cuaService.js
-const axios = require('axios');
 const puppeteer = require('puppeteer');
+const { Stagehand } = require('@browserbasehq/stagehand');
+const { z } = require('zod');
+
 const ParsedPage = require('../models/ParsedPage');
 const ProjectInfo = require('../models/ProjectInfo');
 const { extractTextFromHtml } = require('./htmlParser');
@@ -10,7 +12,10 @@ const logger = require('../utils/logger');
 async function renderWithPuppeteer(rawUrl) {
   let browser;
   try {
-    browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    });
     const page = await browser.newPage();
     await page.goto(rawUrl, { waitUntil: 'networkidle2', timeout: 20000 });
     const html = await page.content();
@@ -46,6 +51,9 @@ async function analyzeWithCua(rawUrl, contentType, limitations = []) {
  * @param {object} [options.signals]
  */
 async function runCUAForProjectInfo(url, options = {}) {
+  let parsedPageFromCUA = null;
+  let projectInfoFromCUA = null;
+  let projectInfoText = null;
   const limitations = [];
   const errors = [];
 
@@ -54,69 +62,117 @@ async function runCUAForProjectInfo(url, options = {}) {
     return { parsedPageFromCUA: null, projectInfoFromCUA: null, projectInfoText: null, limitations, errors };
   }
 
-  let parsedPageFromCUA = null;
-  let projectInfoFromCUA = null;
-  let projectInfoText = null;
-
   try {
     const hasBrowserbaseConfig =
       config.useBrowserbaseForCua &&
       config.browserbaseApiKey &&
-      config.browserbaseProjectId &&
-      config.cuaBaseUrl &&
-      config.cuaModel &&
-      config.cuaApiKey;
+      config.browserbaseProjectId;
 
     if (hasBrowserbaseConfig) {
-      try {
-        const response = await axios.post(
-          `${config.cuaBaseUrl}/analyze`,
-          {
-            url,
-            model: config.cuaModel,
-            maxSteps: config.cuaMaxSteps,
-            maxTokens: config.cuaMaxTokens,
-            browserbase: {
-              apiKey: config.browserbaseApiKey,
-              projectId: config.browserbaseProjectId,
-            },
-            signals: options.signals || {},
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${config.cuaApiKey}`,
-              'Content-Type': 'application/json',
-            },
-            timeout: 30000,
-          }
-        );
+      logger.info('Starting CUA via Browserbase Stagehand', {
+        url,
+        contentType: options.contentType,
+        signals: options.signals,
+      });
 
-        const data = response.data || {};
-        if (data.projectInfo) {
-          const mappedProject = new ProjectInfo();
-          Object.assign(mappedProject, data.projectInfo);
-          projectInfoFromCUA = mappedProject;
+      let stagehand;
+      try {
+        stagehand = new Stagehand({
+          env: 'BROWSERBASE',
+          apiKey: config.browserbaseApiKey,
+          projectId: config.browserbaseProjectId,
+          model: config.cuaModel || 'openai/gpt-4o',
+          verbose: 0,
+        });
+
+        await stagehand.init();
+
+        const page = stagehand.context.activePage();
+        if (!page) {
+          throw new Error('Stagehand: no active page context');
         }
-        projectInfoText = data.textSummary || data.rawText || null;
-        if (data.rawText) {
+
+        await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+
+        try {
+          await page.waitForTimeout(2000);
+          await page.evaluate(() => {
+            window.scrollTo(0, document.body.scrollHeight);
+          });
+          await page.waitForTimeout(1000);
+        } catch (e) {
+          logger.warn('CUA scroll evaluation warning', { message: e.message });
+        }
+
+        try {
+          const html = await page.content();
+          const meta = extractTextFromHtml(html);
           parsedPageFromCUA = new ParsedPage({
             url,
-            title: data.title || '',
-            description: data.description || '',
-            content: data.rawText,
+            title: meta.title,
+            description: meta.description,
+            content: meta.content,
             statusCode: 200,
-            contentLength: data.rawText.length,
+            contentLength: meta.content ? meta.content.length : null,
           });
+        } catch (e) {
+          limitations.push('Failed to build ParsedPage from CUA HTML');
+          logger.warn('CUA HTML -> ParsedPage failed', { message: e.message });
         }
-        if (!data.projectInfo && !data.rawText) {
-          limitations.push('Browserbase/Stagehand CUA returned no data');
+
+        try {
+          const schema = z.object({
+            projectType: z.string().optional(),
+            summary: z.string().optional(),
+            targetAudience: z.string().optional(),
+            mainFlows: z.array(z.string()).optional(),
+            mainFeatures: z.array(z.string()).optional(),
+            techStackGuess: z.array(z.string()).optional(),
+            complexity: z.string().optional(),
+            risks: z.array(z.string()).optional(),
+            tasksForFreelancer: z.array(z.string()).optional(),
+          });
+
+          const extracted = await stagehand.extract(
+            'Проанализируй этот интерфейс как проект для фрилансера и заполни все поля схемы: projectType, summary, targetAudience, mainFlows, mainFeatures, techStackGuess, complexity (low/medium/high/unknown), risks, tasksForFreelancer.',
+            schema
+          );
+
+          if (extracted && typeof extracted === 'object' && !Array.isArray(extracted)) {
+            const mapped = new ProjectInfo();
+            mapped.projectType = extracted.projectType || '';
+            mapped.summary = extracted.summary || '';
+            mapped.targetAudience = extracted.targetAudience || '';
+            mapped.mainFlows = Array.isArray(extracted.mainFlows) ? extracted.mainFlows : [];
+            mapped.mainFeatures = Array.isArray(extracted.mainFeatures) ? extracted.mainFeatures : [];
+            mapped.techStackGuess = Array.isArray(extracted.techStackGuess) ? extracted.techStackGuess : [];
+            mapped.complexity = extracted.complexity || 'unknown';
+            mapped.risks = Array.isArray(extracted.risks) ? extracted.risks : [];
+            mapped.tasksForFreelancer = Array.isArray(extracted.tasksForFreelancer)
+              ? extracted.tasksForFreelancer
+              : [];
+            projectInfoFromCUA = mapped;
+          } else if (extracted && typeof extracted === 'string') {
+            projectInfoText = extracted;
+          }
+        } catch (e) {
+          limitations.push('Stagehand extract failed');
+          errors.push(`Browserbase CUA extract error: ${e.message}`);
         }
-      } catch (err) {
-        errors.push(`Browserbase/Stagehand CUA error: ${err.message}`);
-        limitations.push('Browserbase/Stagehand CUA integration issue, falling back to Puppeteer');
+      } catch (error) {
+        errors.push(`Browserbase CUA error: ${error.message}`);
+        limitations.push('Browserbase CUA failed, will try Puppeteer fallback if enabled');
+      } finally {
+        if (stagehand) {
+          try {
+            await stagehand.close();
+          } catch (e) {
+            logger.warn('Stagehand close warning', { message: e.message });
+          }
+        }
       }
     } else {
-      limitations.push('Browserbase CUA not fully configured, using Puppeteer fallback');
+      limitations.push('Browserbase CUA not fully configured; set BROWSERBASE_API_KEY and BROWSERBASE_PROJECT_ID');
     }
 
     if (!parsedPageFromCUA && config.cuaGloballyEnabled) {
