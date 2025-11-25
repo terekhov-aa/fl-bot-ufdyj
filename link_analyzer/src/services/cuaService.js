@@ -77,11 +77,25 @@ async function runCUAForProjectInfo(url, options = {}) {
 
       let stagehand;
       try {
+        const model = config.cuaModel || 'anthropic/claude-haiku-4-5-20251001';
+
+        let modelApiKey = null;
+        if (model.startsWith('anthropic/')) {
+          modelApiKey = process.env.ANTHROPIC_API_KEY || config.cuaApiKey || config.llmApiKey;
+        } else if (model.startsWith('openai/')) {
+          modelApiKey = process.env.OPENAI_API_KEY || config.llmApiKey || config.cuaApiKey;
+        }
+
+        if (!modelApiKey) {
+          throw new Error(`CUA modelApiKey is not configured for model ${model}`);
+        }
+
         stagehand = new Stagehand({
           env: 'BROWSERBASE',
           apiKey: config.browserbaseApiKey,
           projectId: config.browserbaseProjectId,
-          model: config.cuaModel || 'openai/gpt-4o',
+          model,
+          modelApiKey,
           verbose: 0,
         });
 
@@ -120,44 +134,66 @@ async function runCUAForProjectInfo(url, options = {}) {
           logger.warn('CUA HTML -> ParsedPage failed', { message: e.message });
         }
 
+        const schema = z.object({
+          projectType: z.string().optional(),
+          summary: z.string().optional(),
+          targetAudience: z.string().optional(),
+          mainFlows: z.array(z.string()).optional(),
+          mainFeatures: z.array(z.string()).optional(),
+          techStackGuess: z.array(z.string()).optional(),
+          complexity: z.string().optional(),
+          risks: z.array(z.string()).optional(),
+          tasksForFreelancer: z.array(z.string()).optional(),
+        });
+
+        let agentResult = null;
         try {
-          const schema = z.object({
-            projectType: z.string().optional(),
-            summary: z.string().optional(),
-            targetAudience: z.string().optional(),
-            mainFlows: z.array(z.string()).optional(),
-            mainFeatures: z.array(z.string()).optional(),
-            techStackGuess: z.array(z.string()).optional(),
-            complexity: z.string().optional(),
-            risks: z.array(z.string()).optional(),
-            tasksForFreelancer: z.array(z.string()).optional(),
+          const createAgent = stagehand.createAgent || stagehand.agent;
+          if (!createAgent) {
+            throw new Error('Stagehand agent API not available');
+          }
+
+          const agent = await createAgent.call(stagehand, {
+            instructions:
+              'Изучи продукт на этой странице. Определи тип проекта/продукта, основную ценность, аудиторию, ключевые сценарии и функционал, риски и задачи, которые можно отдать фрилансеру. Верни JSON со схемой ProjectInfo (projectType, summary, targetAudience, mainFlows, mainFeatures, techStackGuess, complexity, risks, tasksForFreelancer). Если не удается структурировать, верни краткий текстовый вывод.',
+            outputSchema: schema,
           });
 
-          const extracted = await stagehand.extract(
-            'Проанализируй этот интерфейс как проект для фрилансера и заполни все поля схемы: projectType, summary, targetAudience, mainFlows, mainFeatures, techStackGuess, complexity (low/medium/high/unknown), risks, tasksForFreelancer.',
-            schema
-          );
-
-          if (extracted && typeof extracted === 'object' && !Array.isArray(extracted)) {
-            const mapped = new ProjectInfo();
-            mapped.projectType = extracted.projectType || '';
-            mapped.summary = extracted.summary || '';
-            mapped.targetAudience = extracted.targetAudience || '';
-            mapped.mainFlows = Array.isArray(extracted.mainFlows) ? extracted.mainFlows : [];
-            mapped.mainFeatures = Array.isArray(extracted.mainFeatures) ? extracted.mainFeatures : [];
-            mapped.techStackGuess = Array.isArray(extracted.techStackGuess) ? extracted.techStackGuess : [];
-            mapped.complexity = extracted.complexity || 'unknown';
-            mapped.risks = Array.isArray(extracted.risks) ? extracted.risks : [];
-            mapped.tasksForFreelancer = Array.isArray(extracted.tasksForFreelancer)
-              ? extracted.tasksForFreelancer
-              : [];
-            projectInfoFromCUA = mapped;
-          } else if (extracted && typeof extracted === 'string') {
-            projectInfoText = extracted;
-          }
+          agentResult = await agent.run();
         } catch (e) {
-          limitations.push('Stagehand extract failed');
-          errors.push(`Browserbase CUA extract error: ${e.message}`);
+          limitations.push('Stagehand agent failed');
+          errors.push(`Browserbase CUA agent error: ${e.message}`);
+        }
+
+        if (!agentResult) {
+          try {
+            const extracted = await stagehand.extract(
+              'Проанализируй этот интерфейс как проект для фрилансера и заполни все поля схемы: projectType, summary, targetAudience, mainFlows, mainFeatures, techStackGuess, complexity (low/medium/high/unknown), risks, tasksForFreelancer.',
+              schema
+            );
+            agentResult = extracted;
+          } catch (e) {
+            limitations.push('Stagehand extract failed');
+            errors.push(`Browserbase CUA extract error: ${e.message}`);
+          }
+        }
+
+        if (agentResult && typeof agentResult === 'object' && !Array.isArray(agentResult)) {
+          const mapped = new ProjectInfo();
+          mapped.projectType = agentResult.projectType || '';
+          mapped.summary = agentResult.summary || '';
+          mapped.targetAudience = agentResult.targetAudience || '';
+          mapped.mainFlows = Array.isArray(agentResult.mainFlows) ? agentResult.mainFlows : [];
+          mapped.mainFeatures = Array.isArray(agentResult.mainFeatures) ? agentResult.mainFeatures : [];
+          mapped.techStackGuess = Array.isArray(agentResult.techStackGuess) ? agentResult.techStackGuess : [];
+          mapped.complexity = agentResult.complexity || 'unknown';
+          mapped.risks = Array.isArray(agentResult.risks) ? agentResult.risks : [];
+          mapped.tasksForFreelancer = Array.isArray(agentResult.tasksForFreelancer)
+            ? agentResult.tasksForFreelancer
+            : [];
+          projectInfoFromCUA = mapped;
+        } else if (agentResult && typeof agentResult === 'string') {
+          projectInfoText = agentResult;
         }
       } catch (error) {
         errors.push(`Browserbase CUA error: ${error.message}`);
