@@ -15,6 +15,7 @@ const llmBaseUrl = process.env.LLM_BASE_URL || 'https://api.openai.com/v1';
 const browserbaseApiKey = process.env.BROWSERBASE_API_KEY || '';
 const browserbaseProjectId = process.env.BROWSERBASE_PROJECT_ID || '';
 const cuaModel = process.env.CUA_MODEL || 'google/gemini-2.5-computer-use-preview-10-2025';
+const cuaApiKey = process.env.CUA_API_KEY || '';
 const cuaMaxSteps = Number(process.env.CUA_MAX_STEPS || 16);
 const cuaMaxTokens = Number(process.env.CUA_MAX_TOKENS || 4000);
 
@@ -31,4 +32,5 @@ module.exports = {
   cuaModel,
   cuaMaxSteps,
   cuaMaxTokens,
+  cuaApiKey,
 };
