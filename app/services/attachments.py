@@ -6,6 +6,7 @@ from typing import Optional
 
 import httpx
 from sqlalchemy.orm import Session
+from openai import AsyncOpenAI
 
 from ..config import get_settings
 from ..models import Attachment
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 async def analyze_and_update_attachment(session: Session, attachment_id: int) -> None:
-    """Отправляет вложение в внешний анализатор и сохраняет его описание в БД."""
+    """Отправляет вложение напрямую в OpenAI API и сохраняет текстовое описание."""
 
     attachment: Optional[Attachment] = session.get(Attachment, attachment_id)
     if attachment is None:
@@ -22,55 +23,104 @@ async def analyze_and_update_attachment(session: Session, attachment_id: int) ->
         return
 
     settings = get_settings()
-    analyzer_url = settings.file_analyzer_url
-    if not analyzer_url:
-        logger.info("File analyzer URL is not configured; skipping analysis", extra={"attachment_id": attachment_id})
+
+    if not settings.llm_api_key:
+        logger.info(
+            "OpenAI API key is not configured; skipping analysis",
+            extra={"attachment_id": attachment_id},
+        )
         return
 
     file_path = Path(attachment.stored_path)
     if not file_path.exists():
-        logger.error("Stored attachment path does not exist", extra={"attachment_id": attachment_id, "path": attachment.stored_path})
+        logger.error(
+            "Stored attachment path does not exist",
+            extra={"attachment_id": attachment_id, "path": attachment.stored_path},
+        )
         return
+    logger.error(
+        "llm_api_key",
+        extra={"llm_api_key": settings.llm_api_key},
+    )
+    client = AsyncOpenAI(
+        api_key=settings.llm_api_key,
+        # base_url можно не трогать — по умолчанию https://api.openai.com/v1
+    )
 
+    # 1) Загружаем файл в Files API
     try:
         with file_path.open("rb") as file_handle:
-            files = {
-                "file": (attachment.filename, file_handle, attachment.mime_type or "application/octet-stream"),
-            }
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(analyzer_url, files=files)
-    except httpx.RequestError as exc:  # pragma: no cover - network errors
-        logger.error("File analyzer request failed", exc_info=exc, extra={"attachment_id": attachment_id})
-        return
-    except Exception as exc:  # pragma: no cover - unexpected file IO errors
-        logger.error("Failed to read attachment for analysis", exc_info=exc, extra={"attachment_id": attachment_id})
-        return
-
-    if response.status_code >= 500:
-        logger.error("File analyzer returned server error", extra={"status_code": response.status_code, "attachment_id": attachment_id})
-        return
-
-    if response.status_code >= 400:
-        logger.warning(
-            "File analyzer returned client error",
-            extra={"status_code": response.status_code, "attachment_id": attachment_id, "response": response.text},
+            uploaded_file = await client.files.create(
+                file=file_handle,
+                purpose="user_data",  # или "assistants", обе опции поддерживаются для файлов :contentReference[oaicite:1]{index=1}
+            )
+    except Exception as exc:  # pragma: no cover - сетевые/IO-ошибки не должны ломать загрузку
+        logger.error(
+            "Failed to upload attachment to OpenAI",
+            exc_info=exc,
+            extra={"attachment_id": attachment_id},
         )
         return
 
+    # 2) Просим модель кратко описать файл через Responses API
     try:
-        payload = response.json()
-    except ValueError:
-        logger.error("File analyzer returned invalid JSON", extra={"attachment_id": attachment_id, "response": response.text})
+        response = await client.responses.create(
+            model=settings.openai_model,  # например, gpt-4.1-mini :contentReference[oaicite:2]{index=2}
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "Ты помощник для сервиса заказов с FL.ru. "
+                                "Кратко (1–2 предложения) опиши содержимое прикреплённого файла "
+                                "для карточки вложения. Пиши по-русски."
+                            ),
+                        },
+                        {
+                            "type": "input_file",
+                            "file_id": uploaded_file.id,
+                        },
+                    ],
+                }
+            ],
+            max_output_tokens=256,
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.error(
+            "OpenAI file analysis request failed",
+            exc_info=exc,
+            extra={"attachment_id": attachment_id},
+        )
         return
 
-    description = payload.get("description") if isinstance(payload, dict) else None
-    if not isinstance(description, str):
+    # В свежих версиях SDK есть удобное поле output_text, собирающее текст из ответа :contentReference[oaicite:3]{index=3}
+    description: Optional[str] = None
+    try:
+        description = (response.output_text or "").strip()  # type: ignore[attr-defined]
+    except AttributeError:
+        # fallback на явный разбор структуры, если output_text вдруг отсутствует
+        try:
+            if response.output and response.output[0].content:
+                first_part = response.output[0].content[0]
+                # в типах Responses API текст лежит внутри output_text.text.value :contentReference[oaicite:4]{index=4}
+                text_obj = getattr(first_part, "text", None)
+                if text_obj is not None:
+                    description = (getattr(text_obj, "value", None) or "").strip()
+        except Exception:
+            description = None
+
+    if not description:
         logger.warning(
-            "File analyzer response does not contain description",
-            extra={"attachment_id": attachment_id, "payload": payload},
+            "OpenAI file analysis did not return description",
+            extra={"attachment_id": attachment_id},
         )
         return
 
     attachment.description = description
     session.commit()
-    logger.info("Attachment description updated from analyzer", extra={"attachment_id": attachment_id})
+    logger.info(
+        "Attachment description updated from OpenAI",
+        extra={"attachment_id": attachment_id},
+    )
