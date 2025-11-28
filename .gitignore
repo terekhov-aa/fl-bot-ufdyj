@@ -2,3 +2,4 @@
 /postgres_data
 .venv
 /uploads/
+/pgadmin_data

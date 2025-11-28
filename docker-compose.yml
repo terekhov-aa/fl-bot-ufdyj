@@ -42,5 +42,18 @@ services:
     networks:
       - default
 
+  pgadmin:
+    image: dpage/pgadmin4
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com  # поменяй на свой
+      PGADMIN_DEFAULT_PASSWORD: admin          # и этот пароль тоже
+    ports:
+      - "3030:80"   # в браузере будет http://localhost:3030
+    depends_on:
+      - db
+    volumes:
+      - ./pgadmin_data:/var/lib/pgadmin
+
 volumes:
   postgres_data:
