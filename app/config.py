@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     file_analyzer_url: Optional[str] = Field(default=None)
     llm_api_key: Optional[str] = Field(default=None, env="LLM_API_KEY")
     openai_model: str = Field(default="gpt-4.1-mini", env="LLM_MODEL")
+    speech_model: str = Field(default="gpt-4o-mini-transcribe", env="LLM_SPEECH_MODEL")
 
     model_config = SettingsConfigDict(
         env_file=".env",

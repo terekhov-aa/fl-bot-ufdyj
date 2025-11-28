@@ -4,18 +4,20 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-import httpx
-from sqlalchemy.orm import Session
 from openai import AsyncOpenAI
+from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..models import Attachment
+from ..utils.file_types import AttachmentKind, classify_extension, suffix_for_filename
 
 logger = logging.getLogger(__name__)
 
+MAX_TEXT_PREVIEW_CHARS = 40_000
+
 
 async def analyze_and_update_attachment(session: Session, attachment_id: int) -> None:
-    """Отправляет вложение напрямую в OpenAI API и сохраняет текстовое описание."""
+    """Определяет тип вложения, анализирует его и сохраняет описание."""
 
     attachment: Optional[Attachment] = session.get(Attachment, attachment_id)
     if attachment is None:
@@ -38,34 +40,66 @@ async def analyze_and_update_attachment(session: Session, attachment_id: int) ->
             extra={"attachment_id": attachment_id, "path": attachment.stored_path},
         )
         return
-    logger.error(
-        "llm_api_key",
-        extra={"llm_api_key": settings.llm_api_key},
-    )
-    client = AsyncOpenAI(
-        api_key=settings.llm_api_key,
-        # base_url можно не трогать — по умолчанию https://api.openai.com/v1
-    )
 
-    # 1) Загружаем файл в Files API
+    ext = suffix_for_filename(file_path.name)
+    kind = classify_extension(ext)
+
+    client = AsyncOpenAI(api_key=settings.llm_api_key)
+
+    description: Optional[str]
     try:
-        with file_path.open("rb") as file_handle:
-            uploaded_file = await client.files.create(
-                file=file_handle,
-                purpose="user_data",  # или "assistants", обе опции поддерживаются для файлов :contentReference[oaicite:1]{index=1}
-            )
-    except Exception as exc:  # pragma: no cover - сетевые/IO-ошибки не должны ломать загрузку
+        if kind is AttachmentKind.IMAGE:
+            description = await _analyze_image_file(client, settings, file_path)
+        elif kind is AttachmentKind.PDF:
+            description = await _analyze_pdf_file(client, settings, file_path)
+        elif kind in (AttachmentKind.TEXT, AttachmentKind.CODE):
+            description = await _analyze_text_like_file(client, settings, file_path, kind)
+        elif kind is AttachmentKind.AUDIO:
+            description = await _analyze_audio_file(client, settings, file_path)
+        elif kind in (
+            AttachmentKind.OFFICE_TEXT,
+            AttachmentKind.OFFICE_SHEET,
+            AttachmentKind.OFFICE_PRESENTATION,
+        ):
+            description = _fallback_office_description(ext)
+        elif kind is AttachmentKind.VIDEO:
+            description = _fallback_video_description(ext)
+        elif kind in (AttachmentKind.ARCHIVE, AttachmentKind.BINARY):
+            description = _fallback_binary_description(ext)
+        else:
+            description = _fallback_unknown_description(ext)
+    except Exception as exc:  # pragma: no cover - анализ не должен ломать загрузку
         logger.error(
-            "Failed to upload attachment to OpenAI",
+            "Unexpected error during attachment analysis",
             exc_info=exc,
-            extra={"attachment_id": attachment_id},
+            extra={"attachment_id": attachment_id, "kind": kind.value},
         )
         return
 
-    # 2) Просим модель кратко описать файл через Responses API
+    if description:
+        attachment.description = description
+        session.commit()
+        logger.info(
+            "Attachment description updated",
+            extra={"attachment_id": attachment_id, "kind": kind.value},
+        )
+
+
+async def _analyze_image_file(client: AsyncOpenAI, settings, file_path: Path) -> Optional[str]:
+    try:
+        with file_path.open("rb") as file_handle:
+            uploaded_file = await client.files.create(file=file_handle, purpose="user_data")
+    except Exception as exc:  # pragma: no cover - сетевые/IO ошибки
+        logger.error(
+            "Failed to upload image for analysis",
+            exc_info=exc,
+            extra={"path": str(file_path)},
+        )
+        return None
+
     try:
         response = await client.responses.create(
-            model=settings.openai_model,  # например, gpt-4.1-mini :contentReference[oaicite:2]{index=2}
+            model=settings.openai_model,
             input=[
                 {
                     "role": "user",
@@ -74,13 +108,14 @@ async def analyze_and_update_attachment(session: Session, attachment_id: int) ->
                             "type": "input_text",
                             "text": (
                                 "Ты помощник для сервиса заказов с FL.ru. "
-                                "Кратко (1–2 предложения) опиши содержимое прикреплённого файла "
+                                "Кратко (1–2 предложения) опиши содержимое изображения "
                                 "для карточки вложения. Пиши по-русски."
                             ),
                         },
                         {
-                            "type": "input_file",
-                            "file_id": uploaded_file.id,
+                            "type": "input_image",
+                            "image_url": {"file_id": uploaded_file.id},
+                            "detail": "low",
                         },
                     ],
                 }
@@ -89,38 +124,203 @@ async def analyze_and_update_attachment(session: Session, attachment_id: int) ->
         )
     except Exception as exc:  # pragma: no cover
         logger.error(
-            "OpenAI file analysis request failed",
+            "OpenAI image analysis failed",
             exc_info=exc,
-            extra={"attachment_id": attachment_id},
+            extra={"path": str(file_path)},
         )
-        return
+        return None
 
-    # В свежих версиях SDK есть удобное поле output_text, собирающее текст из ответа :contentReference[oaicite:3]{index=3}
-    description: Optional[str] = None
+    return _extract_response_text(response)
+
+
+async def _analyze_pdf_file(client: AsyncOpenAI, settings, file_path: Path) -> Optional[str]:
     try:
-        description = (response.output_text or "").strip()  # type: ignore[attr-defined]
-    except AttributeError:
-        # fallback на явный разбор структуры, если output_text вдруг отсутствует
-        try:
-            if response.output and response.output[0].content:
-                first_part = response.output[0].content[0]
-                # в типах Responses API текст лежит внутри output_text.text.value :contentReference[oaicite:4]{index=4}
-                text_obj = getattr(first_part, "text", None)
-                if text_obj is not None:
-                    description = (getattr(text_obj, "value", None) or "").strip()
-        except Exception:
-            description = None
-
-    if not description:
-        logger.warning(
-            "OpenAI file analysis did not return description",
-            extra={"attachment_id": attachment_id},
+        with file_path.open("rb") as file_handle:
+            uploaded_file = await client.files.create(file=file_handle, purpose="user_data")
+    except Exception as exc:  # pragma: no cover
+        logger.error(
+            "Failed to upload PDF for analysis",
+            exc_info=exc,
+            extra={"path": str(file_path)},
         )
-        return
+        return None
 
-    attachment.description = description
-    session.commit()
-    logger.info(
-        "Attachment description updated from OpenAI",
-        extra={"attachment_id": attachment_id},
-    )
+    try:
+        response = await client.responses.create(
+            model=settings.openai_model,
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "Ты помощник для сервиса заказов с FL.ru. "
+                                "Кратко (1–2 предложения) опиши содержимое PDF-файла "
+                                "для карточки вложения. Пиши по-русски."
+                            ),
+                        },
+                        {"type": "input_file", "file_id": uploaded_file.id},
+                    ],
+                }
+            ],
+            max_output_tokens=256,
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.error(
+            "OpenAI PDF analysis failed",
+            exc_info=exc,
+            extra={"path": str(file_path)},
+        )
+        return None
+
+    return _extract_response_text(response)
+
+
+async def _analyze_text_like_file(
+    client: AsyncOpenAI,
+    settings,
+    file_path: Path,
+    kind: AttachmentKind,
+) -> Optional[str]:
+    try:
+        text_content = _read_text_preview(file_path)
+    except Exception as exc:  # pragma: no cover
+        logger.error(
+            "Failed to read text-like file",
+            exc_info=exc,
+            extra={"path": str(file_path)},
+        )
+        return None
+
+    if not text_content:
+        logger.warning("Empty text content for analysis", extra={"path": str(file_path)})
+        return None
+
+    try:
+        response = await client.responses.create(
+            model=settings.openai_model,
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "Ты помощник для сервиса заказов с FL.ru. "
+                                "Кратко (1–2 предложения) опиши содержимое файла "
+                                "для карточки вложения. Пиши по-русски.\n\n" + text_content
+                            ),
+                        }
+                    ],
+                }
+            ],
+            max_output_tokens=256,
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.error(
+            "OpenAI text analysis failed",
+            exc_info=exc,
+            extra={"path": str(file_path), "kind": kind.value},
+        )
+        return None
+
+    return _extract_response_text(response)
+
+
+async def _analyze_audio_file(client: AsyncOpenAI, settings, file_path: Path) -> Optional[str]:
+    try:
+        with file_path.open("rb") as file_handle:
+            transcription = await client.audio.transcriptions.create(
+                model=settings.speech_model,
+                file=file_handle,
+            )
+    except Exception as exc:  # pragma: no cover
+        logger.error(
+            "Audio transcription failed",
+            exc_info=exc,
+            extra={"path": str(file_path)},
+        )
+        return None
+
+    transcript_text = getattr(transcription, "text", "") or ""
+    transcript_text = transcript_text.strip()
+    if not transcript_text:
+        logger.warning("Empty transcription result", extra={"path": str(file_path)})
+        return None
+
+    try:
+        response = await client.responses.create(
+            model=settings.openai_model,
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "У тебя есть транскрипт аудио из заказа FL.ru. "
+                                "Кратко (1–2 предложения) опиши, о чём аудио, по-русски.\n\n"
+                                + transcript_text
+                            ),
+                        }
+                    ],
+                }
+            ],
+            max_output_tokens=256,
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.error(
+            "OpenAI audio summary failed",
+            exc_info=exc,
+            extra={"path": str(file_path)},
+        )
+        return None
+
+    return _extract_response_text(response)
+
+
+def _read_text_preview(file_path: Path, max_chars: int = MAX_TEXT_PREVIEW_CHARS) -> str:
+    text = file_path.read_text(encoding="utf-8", errors="ignore")
+    if len(text) > max_chars:
+        return text[:max_chars]
+    return text
+
+
+def _extract_response_text(response) -> Optional[str]:
+    try:
+        output_text = getattr(response, "output_text", None)
+        if output_text:
+            text_value = output_text.strip()
+            if text_value:
+                return text_value
+    except Exception:
+        pass
+
+    try:
+        if response.output and response.output[0].content:
+            first_part = response.output[0].content[0]
+            text_obj = getattr(first_part, "text", None)
+            if text_obj is not None:
+                text_value = (getattr(text_obj, "value", None) or "").strip()
+                if text_value:
+                    return text_value
+    except Exception:
+        return None
+    return None
+
+
+def _fallback_office_description(ext: str) -> str:
+    return f"Файл формата {ext}. Автоматический анализ офисных документов пока не поддерживается."
+
+
+def _fallback_video_description(ext: str) -> str:
+    return f"Видео-файл формата {ext}. Автоматический анализ видео пока не поддерживается."
+
+
+def _fallback_binary_description(ext: str) -> str:
+    return f"Файл формата {ext}. Автоматический анализ содержимого пока не поддерживается."
+
+
+def _fallback_unknown_description(ext: str) -> str:
+    return f"Файл неизвестного типа ({ext}). Автоматический анализ пока не настроен."
