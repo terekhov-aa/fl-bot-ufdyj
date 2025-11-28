@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     upload_dir: Path = Field(default=Path("/app/uploads"))
     max_upload_mb: int = Field(default=250)
     link_analyzer_url: str = Field(default="http://link-analyzer:3000/analyze")
+    file_analyzer_url: Optional[str] = Field(default=None)
 
     model_config = SettingsConfigDict(
         env_file=".env",

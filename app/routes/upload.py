@@ -12,6 +12,7 @@ from starlette.concurrency import run_in_threadpool
 from ..db import get_session
 from ..models import Attachment
 from ..schemas import UploadAttachmentResponse, UploadMetadataResponse
+from ..services.attachments import analyze_and_update_attachment
 from ..services.orders import ensure_order, update_enriched_json
 from ..services.storage import save_upload_file
 from ..utils.parsing import extract_external_id
@@ -260,6 +261,17 @@ async def _handle_attachment(
     session.add(attachment)
     session.commit()
 
+    try:
+        # Отправляем файл в анализатор для получения описания
+        await analyze_and_update_attachment(session, attachment.id)
+        session.refresh(attachment)
+    except Exception as exc:  # pragma: no cover - анализ не должен ломать загрузку
+        logger.error(
+            "Attachment analysis failed",
+            exc_info=exc,
+            extra={"attachment_id": attachment.id, "order_id": order.id},
+        )
+
     logger.info(
         "Attachment uploaded",
         extra={"attachment_id": attachment.id, "order_id": order.id, "external_id": order.external_id},
@@ -272,6 +284,7 @@ async def _handle_attachment(
             "filename": attachment.filename,
             "size_bytes": attachment.size_bytes,
             "sha256": attachment.sha256,
+            "description": attachment.description,
         },
         order={
             "external_id": order.external_id,
