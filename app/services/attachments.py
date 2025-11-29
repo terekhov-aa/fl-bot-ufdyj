@@ -7,6 +7,9 @@ from typing import Optional
 from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
 
+import base64
+import mimetypes
+
 from ..config import get_settings
 from ..models import Attachment
 from ..utils.file_types import AttachmentKind, classify_extension, suffix_for_filename
@@ -86,12 +89,20 @@ async def analyze_and_update_attachment(session: Session, attachment_id: int) ->
 
 
 async def _analyze_image_file(client: AsyncOpenAI, settings, file_path: Path) -> Optional[str]:
+    """Анализ изображения через Responses API (input_image + data URL)."""
     try:
-        with file_path.open("rb") as file_handle:
-            uploaded_file = await client.files.create(file=file_handle, purpose="user_data")
-    except Exception as exc:  # pragma: no cover - сетевые/IO ошибки
+        # Определяем mime-тип (image/png, image/jpeg и т.п.)
+        mime_type, _ = mimetypes.guess_type(str(file_path))
+        if not mime_type:
+            mime_type = "image/png"
+
+        # Читаем файл и кодируем в base64 → data URL
+        image_bytes = file_path.read_bytes()
+        b64 = base64.b64encode(image_bytes).decode("ascii")
+        data_url = f"data:{mime_type};base64,{b64}"
+    except Exception as exc:  # pragma: no cover
         logger.error(
-            "Failed to upload image for analysis",
+            "Failed to prepare image for analysis",
             exc_info=exc,
             extra={"path": str(file_path)},
         )
@@ -114,8 +125,8 @@ async def _analyze_image_file(client: AsyncOpenAI, settings, file_path: Path) ->
                         },
                         {
                             "type": "input_image",
-                            "image_url": {"file_id": uploaded_file.id},
-                            "detail": "low",
+                            "image_url": data_url,
+                            "detail": "low",  # можно убрать, если не нужно
                         },
                     ],
                 }
