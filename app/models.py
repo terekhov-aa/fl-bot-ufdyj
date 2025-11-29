@@ -70,6 +70,7 @@ class Attachment(Base):
     original_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     page_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     order: Mapped[Order] = relationship(back_populates="attachments")
@@ -85,6 +86,7 @@ class Attachment(Base):
         original_url: str | None = None,
         page_url: str | None = None,
         sha256: str | None = None,
+        description: str | None = None,
         created_at: datetime | None = None,
     ) -> None:
         self.order_id = order_id
@@ -95,6 +97,7 @@ class Attachment(Base):
         self.original_url = original_url
         self.page_url = page_url
         self.sha256 = sha256
+        self.description = description
         self.created_at = created_at or datetime.now(UTC)
 
 

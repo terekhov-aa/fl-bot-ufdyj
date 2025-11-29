@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     upload_dir: Path = Field(default=Path("/app/uploads"))
     max_upload_mb: int = Field(default=250)
     link_analyzer_url: str = Field(default="http://link-analyzer:3000/analyze")
+    file_analyzer_url: Optional[str] = Field(default=None)
+    llm_api_key: Optional[str] = Field(default=None, env="LLM_API_KEY")
+    openai_model: str = Field(default="gpt-4.1-mini", env="LLM_MODEL")
+    speech_model: str = Field(default="gpt-4o-mini-transcribe", env="LLM_SPEECH_MODEL")
 
     model_config = SettingsConfigDict(
         env_file=".env",

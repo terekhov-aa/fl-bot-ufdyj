@@ -28,6 +28,7 @@ class AttachmentResponse(BaseModel):
     original_url: Optional[str] = None
     page_url: Optional[str] = None
     sha256: Optional[str] = None
+    description: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
