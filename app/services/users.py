@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterable, Optional
+from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, UploadFile
@@ -19,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 _UNSET = object()
 _DEFAULT_CHUNK_SIZE = 1024 * 1024
+_URL_PATTERN = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
 
 
 def normalize_categories(categories: Optional[list[str]]) -> Optional[list[str]]:
@@ -47,6 +50,26 @@ def create_user(session: Session, *, meta: Optional[dict] = None) -> User:
     return user
 
 
+def _normalize_url(url: str) -> str:
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
+    netloc = parts.netloc.lower()
+    return urlunsplit((scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
+def _extract_links(text: str) -> list[str]:
+    seen: set[str] = set()
+    links: list[str] = []
+    for match in _URL_PATTERN.finditer(text):
+        raw = match.group(0).rstrip('.,")\'\u00bb')
+        normalized = _normalize_url(raw)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        links.append(normalized)
+    return links
+
+
 def update_user(
     session: Session,
     uid: UUID,
@@ -60,9 +83,22 @@ def update_user(
 
     if competencies_text is not _UNSET:
         user.competencies_text = competencies_text  # type: ignore[assignment]
+        meta = user.meta or {}
+        meta["links"] = _extract_links(competencies_text or "")  # type: ignore[index]
+        user.meta = meta
     if categories is not _UNSET:
         normalized = normalize_categories(categories) if categories is not None else None  # type: ignore[arg-type]
         user.categories = normalized
+
+    for attachment in user.attachments:
+        if attachment.meta is None:
+            attachment.meta = {
+                "filename": attachment.filename,
+                "stored_path": attachment.stored_path,
+                "size": attachment.size,
+                "sha256": attachment.sha256,
+                "content_type": attachment.content_type,
+            }
     user.updated_at = datetime.now(UTC)
     session.flush()
     logger.info("Updated user", extra={"user_uid": str(user.uid)})

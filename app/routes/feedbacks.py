@@ -5,15 +5,17 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from ..db import get_session
 from ..models import Order, OrderFeedback, User
 from ..schemas import (
     OrderFeedbackCreate,
-    OrderFeedbackListResponse, 
+    OrderFeedbackGenerate,
+    OrderFeedbackListResponse,
     OrderFeedbackResponse
 )
+from ..services.feedback_generator import generate_feedback_text
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +72,67 @@ def create_feedback(
         }
     )
     
+    return OrderFeedbackResponse.model_validate(feedback)
+
+
+@router.post("/generate", response_model=OrderFeedbackResponse)
+def generate_feedback(
+    feedback_data: OrderFeedbackGenerate,
+    session: Session = Depends(get_session)
+) -> OrderFeedbackResponse:
+    """Автогенерация отклика на заказ."""
+
+    order = (
+        session.query(Order)
+        .options(joinedload(Order.attachments))
+        .filter(Order.id == feedback_data.order_id)
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=404, detail=f"Order with id {feedback_data.order_id} not found")
+
+    user = (
+        session.query(User)
+        .options(joinedload(User.attachments))
+        .filter(User.uid == feedback_data.user_id)
+        .first()
+    )
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User with id {feedback_data.user_id} not found")
+
+    existing_feedback = session.query(OrderFeedback).filter(
+        OrderFeedback.order_id == feedback_data.order_id,
+        OrderFeedback.user_id == feedback_data.user_id
+    ).first()
+
+    if existing_feedback:
+        raise HTTPException(
+            status_code=400,
+            detail=f"User {feedback_data.user_id} already left feedback for order {feedback_data.order_id}"
+        )
+
+    feedback_text = generate_feedback_text(user, order)
+
+    feedback = OrderFeedback(
+        order_id=feedback_data.order_id,
+        user_id=feedback_data.user_id,
+        feedback_text=feedback_text,
+        status="pending",
+    )
+
+    session.add(feedback)
+    session.commit()
+    session.refresh(feedback)
+
+    logger.info(
+        "Feedback generated",
+        extra={
+            "feedback_id": feedback.id,
+            "order_id": feedback.order_id,
+            "user_id": str(feedback.user_id)
+        }
+    )
+
     return OrderFeedbackResponse.model_validate(feedback)
 
 
