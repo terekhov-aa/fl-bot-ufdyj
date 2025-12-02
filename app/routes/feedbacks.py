@@ -5,7 +5,8 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from ..db import get_session
 from ..models import Order, OrderFeedback, User
@@ -30,20 +31,22 @@ def create_feedback(
     """Создание отклика на заказ"""
     
     # Проверяем существование заказа
-    order = session.query(Order).filter(Order.id == feedback_data.order_id).first()
+    order = session.get(Order, feedback_data.order_id)
     if not order:
         raise HTTPException(status_code=404, detail=f"Order with id {feedback_data.order_id} not found")
-    
+
     # Проверяем существование пользователя
-    user = session.query(User).filter(User.uid == feedback_data.user_id).first()
+    user = session.get(User, feedback_data.user_id)
     if not user:
         raise HTTPException(status_code=404, detail=f"User with id {feedback_data.user_id} not found")
-    
+
     # Проверяем, не оставлял ли пользователь уже отклик на этот заказ
-    existing_feedback = session.query(OrderFeedback).filter(
-        OrderFeedback.order_id == feedback_data.order_id,
-        OrderFeedback.user_id == feedback_data.user_id
-    ).first()
+    existing_feedback = session.scalar(
+        select(OrderFeedback).where(
+            OrderFeedback.order_id == feedback_data.order_id,
+            OrderFeedback.user_id == feedback_data.user_id,
+        )
+    )
     
     if existing_feedback:
         raise HTTPException(
@@ -82,28 +85,20 @@ def generate_feedback(
 ) -> OrderFeedbackResponse:
     """Автогенерация отклика на заказ."""
 
-    order = (
-        session.query(Order)
-        .options(joinedload(Order.attachments))
-        .filter(Order.id == feedback_data.order_id)
-        .first()
-    )
+    order = session.get(Order, feedback_data.order_id)
     if not order:
         raise HTTPException(status_code=404, detail=f"Order with id {feedback_data.order_id} not found")
 
-    user = (
-        session.query(User)
-        .options(joinedload(User.attachments))
-        .filter(User.uid == feedback_data.user_id)
-        .first()
-    )
+    user = session.get(User, feedback_data.user_id)
     if not user:
         raise HTTPException(status_code=404, detail=f"User with id {feedback_data.user_id} not found")
 
-    existing_feedback = session.query(OrderFeedback).filter(
-        OrderFeedback.order_id == feedback_data.order_id,
-        OrderFeedback.user_id == feedback_data.user_id
-    ).first()
+    existing_feedback = session.scalar(
+        select(OrderFeedback).where(
+            OrderFeedback.order_id == feedback_data.order_id,
+            OrderFeedback.user_id == feedback_data.user_id,
+        )
+    )
 
     if existing_feedback:
         raise HTTPException(
@@ -146,15 +141,17 @@ def get_order_feedbacks(
     """Получение всех откликов на заказ"""
     
     # Проверяем существование заказа
-    order = session.query(Order).filter(Order.id == order_id).first()
+    order = session.get(Order, order_id)
     if not order:
         raise HTTPException(status_code=404, detail=f"Order with id {order_id} not found")
-    
-    feedbacks = session.query(OrderFeedback).filter(
-        OrderFeedback.order_id == order_id
-    ).order_by(
-        OrderFeedback.created_at.desc()
-    ).offset(offset).limit(limit).all()
+
+    feedbacks = session.scalars(
+        select(OrderFeedback)
+        .where(OrderFeedback.order_id == order_id)
+        .order_by(OrderFeedback.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    ).all()
     
     items = [OrderFeedbackResponse.model_validate(feedback) for feedback in feedbacks]
     
@@ -175,15 +172,17 @@ def get_user_feedbacks(
     """Получение всех откликов пользователя"""
     
     # Проверяем существование пользователя
-    user = session.query(User).filter(User.uid == user_id).first()
+    user = session.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail=f"User with id {user_id} not found")
-    
-    feedbacks = session.query(OrderFeedback).filter(
-        OrderFeedback.user_id == user_id
-    ).order_by(
-        OrderFeedback.created_at.desc()
-    ).offset(offset).limit(limit).all()
+
+    feedbacks = session.scalars(
+        select(OrderFeedback)
+        .where(OrderFeedback.user_id == user_id)
+        .order_by(OrderFeedback.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    ).all()
     
     items = [OrderFeedbackResponse.model_validate(feedback) for feedback in feedbacks]
     
@@ -208,10 +207,8 @@ def update_feedback_status(
             detail=f"Invalid status: {status}. Must be one of: pending, accepted, rejected"
         )
     
-    feedback = session.query(OrderFeedback).filter(
-        OrderFeedback.id == feedback_id
-    ).first()
-    
+    feedback = session.get(OrderFeedback, feedback_id)
+
     if not feedback:
         raise HTTPException(status_code=404, detail=f"Feedback with id {feedback_id} not found")
     
@@ -237,9 +234,7 @@ def delete_feedback(
 ) -> dict:
     """Удаление отклика"""
     
-    feedback = session.query(OrderFeedback).filter(
-        OrderFeedback.id == feedback_id
-    ).first()
+    feedback = session.get(OrderFeedback, feedback_id)
     
     if not feedback:
         raise HTTPException(status_code=404, detail=f"Feedback with id {feedback_id} not found")
