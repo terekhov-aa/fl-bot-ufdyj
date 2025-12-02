@@ -6,7 +6,6 @@ from email.policy import default as email_default_policy
 from typing import Any
 
 from fastapi import UploadFile
-from starlette.datastructures import Headers
 
 
 def parse_multipart_body(body: bytes, content_type_header: str) -> dict[str, Any]:
@@ -35,13 +34,8 @@ def parse_multipart_body(body: bytes, content_type_header: str) -> dict[str, Any
         existing = parsed.get(name)
 
         if filename:
-            headers = Headers(
-                {
-                    "content-disposition": part["Content-Disposition"],
-                    "content-type": part.get_content_type(),
-                }
-            )
-            upload = UploadFile(file=io.BytesIO(payload), filename=filename, headers=headers)
+            # Do not pass headers to avoid UnicodeEncodeError on non-latin-1 filenames
+            upload = UploadFile(file=io.BytesIO(payload), filename=filename)
 
             if existing is None:
                 parsed[name] = upload
