@@ -37,9 +37,10 @@ def parse_multipart_body(body: bytes, content_type_header: str) -> dict[str, Any
         if filename:
             headers = Headers(
                 {
-                    "content-disposition": part["Content-Disposition"],
-                    "content-type": part.get_content_type(),
-                }
+                    "content-disposition": str(part["Content-Disposition"]),
+                    "content-type": str(part.get_content_type()),
+                },
+                encoding="utf-8",
             )
             upload = UploadFile(file=io.BytesIO(payload), filename=filename, headers=headers)
 
