@@ -3,10 +3,34 @@ from __future__ import annotations
 import io
 from email.parser import BytesParser
 from email.policy import default as email_default_policy
-from typing import Any
+from typing import Any, Dict, Mapping
 
 from fastapi import UploadFile
 from starlette.datastructures import Headers
+
+
+def _sanitize_headers_for_latin1(headers_dict: Mapping[str, Any]) -> Dict[str, str]:
+    """Return a copy of headers_dict with values safe for latin-1 encoding."""
+
+    safe: Dict[str, str] = {}
+
+    for key, value in headers_dict.items():
+        if isinstance(value, bytes):
+            try:
+                text = value.decode("latin-1")
+            except UnicodeDecodeError:
+                text = value.decode("utf-8", "ignore")
+        else:
+            text = str(value)
+
+        try:
+            text.encode("latin-1")
+        except UnicodeEncodeError:
+            text = text.encode("latin-1", "replace").decode("latin-1")
+
+        safe[str(key)] = text
+
+    return safe
 
 
 def parse_multipart_body(body: bytes, content_type_header: str) -> dict[str, Any]:
@@ -36,10 +60,12 @@ def parse_multipart_body(body: bytes, content_type_header: str) -> dict[str, Any
 
         if filename:
             headers = Headers(
-                {
-                    "content-disposition": part["Content-Disposition"],
-                    "content-type": part.get_content_type(),
-                }
+                _sanitize_headers_for_latin1(
+                    {
+                        "content-disposition": part["Content-Disposition"],
+                        "content-type": part.get_content_type(),
+                    }
+                )
             )
             upload = UploadFile(file=io.BytesIO(payload), filename=filename, headers=headers)
 
