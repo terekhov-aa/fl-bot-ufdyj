@@ -10,10 +10,12 @@ from sqlalchemy.orm import Session
 from ..db import get_session
 from ..models import Order, OrderFeedback, User
 from ..schemas import (
+    OrderFeedbackAutoCreate,
     OrderFeedbackCreate,
-    OrderFeedbackListResponse, 
-    OrderFeedbackResponse
+    OrderFeedbackListResponse,
+    OrderFeedbackResponse,
 )
+from ..services.feedback_generation import generate_order_feedback
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +24,7 @@ router = APIRouter(prefix="/api/feedbacks", tags=["feedbacks"])
 
 @router.post("/", response_model=OrderFeedbackResponse)
 def create_feedback(
-    feedback_data: OrderFeedbackCreate,
-    session: Session = Depends(get_session)
+    feedback_data: OrderFeedbackCreate, session: Session = Depends(get_session)
 ) -> OrderFeedbackResponse:
     """Создание отклика на заказ"""
     
@@ -71,6 +72,18 @@ def create_feedback(
     )
     
     return OrderFeedbackResponse.model_validate(feedback)
+
+
+@router.post("/auto", response_model=OrderFeedbackResponse)
+async def create_auto_feedback(
+    payload: OrderFeedbackAutoCreate, session: Session = Depends(get_session)
+) -> OrderFeedbackResponse:
+    """Автоматическая генерация отклика на заказ с помощью нейросети."""
+
+    feedback = await generate_order_feedback(
+        session=session, order_id=payload.order_id, user_uid=payload.user_id
+    )
+    return OrderFeedbackResponse.model_validate(feedback, from_attributes=True)
 
 
 @router.get("/order/{order_id}", response_model=OrderFeedbackListResponse)
