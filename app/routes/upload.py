@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -12,8 +13,9 @@ from starlette.concurrency import run_in_threadpool
 from ..db import get_session
 from ..models import Attachment
 from ..schemas import UploadAttachmentResponse, UploadMetadataResponse
-from ..services.attachments import analyze_and_update_attachment
+from ..services.attachments import analyze_attachment_detached
 from ..services.orders import ensure_order, update_enriched_json
+from ..services.link_analysis import extract_links, schedule_link_analysis
 from ..services.storage import save_upload_file
 from ..utils.parsing import extract_external_id
 from ..utils.multipart import parse_multipart_body
@@ -198,6 +200,15 @@ def _handle_metadata(session: Session, project_data_raw: str) -> UploadMetadataR
     update_enriched_json(order, project_data)
     session.commit()
 
+    link_sources: list[str] = []
+    for key in ("summary", "description", "text"):
+        value = project_data.get(key)
+        if isinstance(value, str):
+            link_sources.append(value)
+    links = extract_links("\n".join(link_sources))
+    if links:
+        schedule_link_analysis(links, order_id=order.id)
+
     logger.info("Metadata uploaded", extra={"external_id": order.external_id, "order_id": order.id})
 
     return UploadMetadataResponse(
@@ -262,12 +273,10 @@ async def _handle_attachment(
     session.commit()
 
     try:
-        # Отправляем файл в анализатор для получения описания
-        await analyze_and_update_attachment(session, attachment.id)
-        session.refresh(attachment)
+        asyncio.get_running_loop().create_task(analyze_attachment_detached(attachment.id))
     except Exception as exc:  # pragma: no cover - анализ не должен ломать загрузку
         logger.error(
-            "Attachment analysis failed",
+            "Attachment analysis scheduling failed",
             exc_info=exc,
             extra={"attachment_id": attachment.id, "order_id": order.id},
         )
