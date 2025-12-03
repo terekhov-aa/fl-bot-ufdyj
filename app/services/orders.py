@@ -127,7 +127,7 @@ def list_orders(
         else:
             stmt = stmt.where(~Order.attachments.any())
     stmt = stmt.offset(offset).limit(limit)
-    return list(session.scalars(stmt))
+    return session.execute(stmt).unique().scalars().all()
 
 
 def collect_attachments(order: Order) -> list[Attachment]:
