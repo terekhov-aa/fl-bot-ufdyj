@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects.postgresql import UUID
 
 revision = "202409010001"
 down_revision = "202408010001"
@@ -33,7 +33,7 @@ def upgrade() -> None:
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
         sa.Column(
             "user_uid",
-            postgresql.UUID(as_uuid=True),
+            UUID(as_uuid=True),
             sa.ForeignKey("users.uid", ondelete="CASCADE"),
             nullable=False,
         ),
