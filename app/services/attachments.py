@@ -11,7 +11,8 @@ import base64
 import mimetypes
 
 from ..config import get_settings
-from ..models import Attachment
+from ..db import SessionLocal
+from ..models import Attachment, AttachmentAnalysis
 from ..utils.file_types import AttachmentKind, classify_extension, suffix_for_filename
 
 logger = logging.getLogger(__name__)
@@ -81,11 +82,21 @@ async def analyze_and_update_attachment(session: Session, attachment_id: int) ->
 
     if description:
         attachment.description = description
+        analysis = AttachmentAnalysis(attachment_id=attachment_id, description=description)
+        session.add(analysis)
         session.commit()
         logger.info(
             "Attachment description updated",
             extra={"attachment_id": attachment_id, "kind": kind.value},
         )
+
+
+async def analyze_attachment_detached(attachment_id: int) -> None:
+    session = SessionLocal()
+    try:
+        await analyze_and_update_attachment(session, attachment_id)
+    finally:
+        session.close()
 
 
 async def _analyze_image_file(client: AsyncOpenAI, settings, file_path: Path) -> Optional[str]:

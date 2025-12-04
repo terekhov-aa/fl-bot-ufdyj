@@ -12,6 +12,7 @@ from ..config import Settings, get_settings
 from ..db import get_session
 from ..schemas import UserAttachmentOut, UserCreateResponse, UserDetail, UserPatch
 from ..services import users as users_service
+from ..services.link_analysis import extract_links, schedule_link_analysis
 from ..utils.multipart import parse_multipart_body
 
 logger = logging.getLogger(__name__)
@@ -28,7 +29,7 @@ router = APIRouter(prefix="/api/users", tags=["users"])
             "a `meta` object with arbitrary JSON data."
     ),
 )
-def create_user_endpoint(
+async def create_user_endpoint(
         payload: dict[str, Any] | None = Body(default=None),
         session: Session = Depends(get_session),
 ) -> UserCreateResponse:
@@ -67,7 +68,7 @@ def get_user_endpoint(
             "normalized to lower case without duplicates."
     ),
 )
-def patch_user_endpoint(
+async def patch_user_endpoint(
         uid: UUID,
         payload: UserPatch,
         session: Session = Depends(get_session),
@@ -80,6 +81,10 @@ def patch_user_endpoint(
         update_kwargs["categories"] = data["categories"]
     users_service.update_user(session, uid, **update_kwargs)
     user = users_service.get_user_detail(session, uid)
+    if "competencies_text" in data and data["competencies_text"]:
+        links = extract_links(data["competencies_text"])
+        if links:
+            schedule_link_analysis(links, user_uid=uid)
     logger.info("Updated user via API", extra={"user_uid": str(uid)})
     return UserDetail.model_validate(user, from_attributes=True)
 

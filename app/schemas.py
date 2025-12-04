@@ -106,6 +106,13 @@ class OrderFeedbackCreate(BaseModel):
     feedback_text: str
 
 
+class OrderFeedbackAutoCreate(BaseModel):
+    """Схема для автогенерации отклика на заказ"""
+
+    order_id: int
+    user_id: UUID
+
+
 class OrderFeedbackResponse(BaseModel):
     """Схема для ответа отклика на заказ"""
     id: int

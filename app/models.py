@@ -32,6 +32,9 @@ class Order(Base):
 
     attachments: Mapped[list[Attachment]] = relationship(back_populates="order", cascade="all, delete-orphan")
     feedbacks: Mapped[list["OrderFeedback"]] = relationship(back_populates="order", cascade="all, delete-orphan")
+    link_analyses: Mapped[list["OrderLinkAnalysis"]] = relationship(
+        back_populates="order", cascade="all, delete-orphan"
+    )
 
     def __init__(
         self,
@@ -74,6 +77,9 @@ class Attachment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     order: Mapped[Order] = relationship(back_populates="attachments")
+    analyses: Mapped[list["AttachmentAnalysis"]] = relationship(
+        back_populates="attachment", cascade="all, delete-orphan"
+    )
 
     def __init__(
         self,
@@ -114,6 +120,9 @@ class User(Base):
     )
 
     attachments: Mapped[list["UserAttachment"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    link_analyses: Mapped[list["UserLinkAnalysis"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
     feedbacks: Mapped[list["OrderFeedback"]] = relationship(back_populates="user", cascade="all, delete-orphan")
@@ -158,3 +167,45 @@ class OrderFeedback(Base):
     # Relationships
     order: Mapped["Order"] = relationship(back_populates="feedbacks")
     user: Mapped["User"] = relationship(back_populates="feedbacks")
+
+
+class AttachmentAnalysis(Base):
+    __tablename__ = "attachment_analyses"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    attachment_id: Mapped[int] = mapped_column(
+        ForeignKey("attachments.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_json: Mapped[dict | None] = mapped_column(JSONBType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    attachment: Mapped[Attachment] = relationship(back_populates="analyses")
+
+
+class UserLinkAnalysis(Base):
+    __tablename__ = "user_link_analyses"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_uid: Mapped[UUID] = mapped_column(
+        UUIDType, ForeignKey("users.uid", ondelete="CASCADE"), nullable=False, index=True
+    )
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    analysis_json: Mapped[dict | None] = mapped_column(JSONBType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    user: Mapped[User] = relationship(back_populates="link_analyses")
+
+
+class OrderLinkAnalysis(Base):
+    __tablename__ = "order_link_analyses"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    order_id: Mapped[int] = mapped_column(
+        ForeignKey("orders.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    analysis_json: Mapped[dict | None] = mapped_column(JSONBType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    order: Mapped[Order] = relationship(back_populates="link_analyses")
