@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 from uuid import UUID
@@ -10,7 +11,15 @@ from starlette.datastructures import FormData
 
 from ..config import Settings, get_settings
 from ..db import get_session
-from ..schemas import UserAttachmentOut, UserCreateResponse, UserDetail, UserPatch
+from ..models import User
+from ..schemas import (
+    UserAttachmentOut,
+    UserAttachmentRow,
+    UserCreateResponse,
+    UserDetail,
+    UserLinkAnalysisRow,
+    UserPatch,
+)
 from ..services import users as users_service
 from ..services.link_analysis import extract_links, schedule_link_analysis
 from ..utils.multipart import parse_multipart_body
@@ -59,6 +68,15 @@ def get_user_endpoint(
     return UserDetail.model_validate(user, from_attributes=True)
 
 
+def _analysis_preview(payload: dict | None, *, limit: int = 1500) -> str | None:
+    if payload is None:
+        return None
+    raw = json.dumps(payload, ensure_ascii=False)
+    if len(raw) <= limit:
+        return raw
+    return raw[:limit] + "…"
+
+
 @router.patch(
     "/{uid}",
     response_model=UserDetail,
@@ -87,6 +105,57 @@ async def patch_user_endpoint(
             schedule_link_analysis(links, user_uid=uid)
     logger.info("Updated user via API", extra={"user_uid": str(uid)})
     return UserDetail.model_validate(user, from_attributes=True)
+
+
+@router.get(
+    "/{uid}/attachments",
+    response_model=list[UserAttachmentRow],
+    summary="List user attachments",
+)
+def list_user_attachments_endpoint(uid: UUID, session: Session = Depends(get_session)) -> list[UserAttachmentRow]:
+    user = session.get(User, uid)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    rows: list[UserAttachmentRow] = []
+    for attachment in sorted(user.attachments, key=lambda item: item.created_at):
+        rows.append(
+            UserAttachmentRow(
+                id=attachment.id,
+                filename=attachment.filename,
+                mime_type=getattr(attachment, "content_type", None),
+                description=getattr(attachment, "meta", {}).get("description") if getattr(attachment, "meta", None) else None,
+                ai_description=None,
+                created_at=attachment.created_at,
+            )
+        )
+
+    return rows
+
+
+@router.get(
+    "/{uid}/links",
+    response_model=list[UserLinkAnalysisRow],
+    summary="List user link analyses",
+)
+def list_user_link_analyses_endpoint(uid: UUID, session: Session = Depends(get_session)) -> list[UserLinkAnalysisRow]:
+    user = session.get(User, uid)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    rows: list[UserLinkAnalysisRow] = []
+    for analysis in user.link_analyses:
+        rows.append(
+            UserLinkAnalysisRow(
+                id=analysis.id,
+                url=analysis.url,
+                description=analysis.description,
+                analysis_json_preview=_analysis_preview(analysis.analysis_json),
+                created_at=analysis.created_at,
+            )
+        )
+
+    return rows
 
 
 @router.post(

@@ -192,6 +192,7 @@ class UserLinkAnalysis(Base):
     )
     url: Mapped[str] = mapped_column(Text, nullable=False)
     analysis_json: Mapped[dict | None] = mapped_column(JSONBType, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     user: Mapped[User] = relationship(back_populates="link_analyses")
@@ -206,6 +207,7 @@ class OrderLinkAnalysis(Base):
     )
     url: Mapped[str] = mapped_column(Text, nullable=False)
     analysis_json: Mapped[dict | None] = mapped_column(JSONBType, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     order: Mapped[Order] = relationship(back_populates="link_analyses")

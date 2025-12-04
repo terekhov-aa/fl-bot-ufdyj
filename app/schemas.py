@@ -33,6 +33,10 @@ class AttachmentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AttachmentDescriptionPatch(BaseModel):
+    description: str | None
+
+
 class OrderResponse(BaseModel):
     external_id: Optional[int]
     link: str
@@ -52,6 +56,28 @@ class OrdersListResponse(BaseModel):
     items: list[OrderResponse]
     limit: int
     offset: int
+
+
+class OrderAttachmentRow(BaseModel):
+    id: int
+    filename: str
+    mime_type: str | None
+    description: str | None
+    ai_description: str | None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserAttachmentRow(BaseModel):
+    id: int
+    filename: str
+    mime_type: str | None
+    description: str | None
+    ai_description: str | None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UploadMetadataResponse(BaseModel):
@@ -131,3 +157,27 @@ class OrderFeedbackListResponse(BaseModel):
     items: list[OrderFeedbackResponse]
     limit: int
     offset: int
+
+
+class OrderLinkAnalysisRow(BaseModel):
+    id: int
+    url: str
+    description: str | None
+    analysis_json_preview: str | None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserLinkAnalysisRow(BaseModel):
+    id: int
+    url: str
+    description: str | None
+    analysis_json_preview: str | None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LinkDescriptionPatch(BaseModel):
+    description: str | None
