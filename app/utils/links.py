@@ -30,6 +30,12 @@ def _unwrap_fl_redirect(url: str) -> str:
     return url
 
 
+def normalized_link_key(url: str) -> str:
+    """Normalization key used for deduplication and analysis."""
+
+    return normalize_url(_unwrap_fl_redirect(url))
+
+
 def extract_links(text: str | None) -> list[str]:
     if not text:
         return []
@@ -37,10 +43,10 @@ def extract_links(text: str | None) -> list[str]:
     links: list[str] = []
     for match in URL_PATTERN.finditer(text):
         raw = match.group(0).rstrip('.,")\'\u00bb')
-        normalized = normalize_url(_unwrap_fl_redirect(raw))
+        normalized = normalized_link_key(raw)
         if normalized not in seen:
             seen.add(normalized)
-            links.append(normalized)
+            links.append(raw)
     return links
 
 

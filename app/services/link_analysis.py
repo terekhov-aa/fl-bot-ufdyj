@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..config import get_settings
 from ..db import SessionLocal
 from ..models import OrderLinkAnalysis, UserLinkAnalysis
-from ..utils.links import extract_links, merge_links, normalize_url
+from ..utils.links import extract_links, normalized_link_key
 
 logger = logging.getLogger(__name__)
 
@@ -38,20 +38,32 @@ async def _analyze_single(url: str) -> dict | None:
 async def analyze_links_and_store(
     urls: Iterable[str], *, order_id: int | None = None, user_uid=None
 ) -> None:
-    unique_urls = merge_links([normalize_url(url) for url in urls])
-    if not unique_urls:
+    unique_links: list[tuple[str, str]] = []  # (normalized, original)
+    seen: set[str] = set()
+    for original in urls:
+        normalized = normalized_link_key(original)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_links.append((normalized, original))
+
+    if not unique_links:
         return
 
-    results = await asyncio.gather(*[_analyze_single(url) for url in unique_urls])
+    results = await asyncio.gather(*[_analyze_single(url) for url, _ in unique_links])
     session: Session = SessionLocal()
     try:
-        for url, payload in zip(unique_urls, results):
+        for (_, original_url), payload in zip(unique_links, results):
             if payload is None:
                 continue
             if order_id is not None:
-                session.add(OrderLinkAnalysis(order_id=order_id, url=url, analysis_json=payload))
+                session.add(
+                    OrderLinkAnalysis(order_id=order_id, url=original_url, analysis_json=payload)
+                )
             if user_uid is not None:
-                session.add(UserLinkAnalysis(user_uid=user_uid, url=url, analysis_json=payload))
+                session.add(
+                    UserLinkAnalysis(user_uid=user_uid, url=original_url, analysis_json=payload)
+                )
         session.commit()
     except Exception:
         session.rollback()
