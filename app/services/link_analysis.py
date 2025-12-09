@@ -45,6 +45,14 @@ async def analyze_links_and_store(
     results = await asyncio.gather(*[_analyze_single(url) for url in unique_urls])
     session: Session = SessionLocal()
     try:
+        if order_id is not None:
+            session.query(OrderLinkAnalysis).filter_by(order_id=order_id).delete(
+                synchronize_session=False
+            )
+        if user_uid is not None:
+            session.query(UserLinkAnalysis).filter_by(user_uid=user_uid).delete(
+                synchronize_session=False
+            )
         for url, payload in zip(unique_urls, results):
             if payload is None:
                 continue
