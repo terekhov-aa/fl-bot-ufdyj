@@ -38,24 +38,79 @@ async def _analyze_single(url: str) -> dict | None:
 async def analyze_links_and_store(
     urls: Iterable[str], *, order_id: int | None = None, user_uid=None
 ) -> None:
-    unique_urls = merge_links([normalize_url(url) for url in urls])
-    if not unique_urls:
+    if order_id is None and user_uid is None:
         return
 
-    results = await asyncio.gather(*[_analyze_single(url) for url in unique_urls])
+    unique_urls = merge_links([normalize_url(url) for url in urls])
+    current_urls = set(unique_urls)
+
     session: Session = SessionLocal()
     try:
-        for url, payload in zip(unique_urls, results):
-            if payload is None:
-                continue
-            if order_id is not None:
-                session.add(OrderLinkAnalysis(order_id=order_id, url=url, analysis_json=payload))
-            if user_uid is not None:
-                session.add(UserLinkAnalysis(user_uid=user_uid, url=url, analysis_json=payload))
+        existing_order_urls: set[str] = set()
+        existing_user_urls: set[str] = set()
+
+        if order_id is not None:
+            existing_order_urls = {
+                row[0]
+                for row in session.query(OrderLinkAnalysis.url).filter(
+                    OrderLinkAnalysis.order_id == order_id
+                )
+            }
+
+        if user_uid is not None:
+            existing_user_urls = {
+                row[0]
+                for row in session.query(UserLinkAnalysis.url).filter(
+                    UserLinkAnalysis.user_uid == user_uid
+                )
+            }
+
+        new_order_urls = current_urls - existing_order_urls if order_id is not None else set()
+        new_user_urls = current_urls - existing_user_urls if user_uid is not None else set()
+
+        urls_to_delete_order = existing_order_urls - current_urls if order_id is not None else set()
+        urls_to_delete_user = existing_user_urls - current_urls if user_uid is not None else set()
+
+        urls_to_analyze = list(new_order_urls | new_user_urls)
+        tasks = [_analyze_single(url) for url in urls_to_analyze]
+        results = await asyncio.gather(*tasks) if tasks else []
+        analyzed_payloads = {
+            url: payload for url, payload in zip(urls_to_analyze, results) if payload is not None
+        }
+
+        if urls_to_delete_order:
+            session.query(OrderLinkAnalysis).filter(
+                OrderLinkAnalysis.order_id == order_id,
+                OrderLinkAnalysis.url.in_(urls_to_delete_order),
+            ).delete(synchronize_session=False)
+
+        if urls_to_delete_user:
+            session.query(UserLinkAnalysis).filter(
+                UserLinkAnalysis.user_uid == user_uid,
+                UserLinkAnalysis.url.in_(urls_to_delete_user),
+            ).delete(synchronize_session=False)
+
+        if order_id is not None:
+            for url in new_order_urls:
+                if url in analyzed_payloads:
+                    session.add(
+                        OrderLinkAnalysis(order_id=order_id, url=url, analysis_json=analyzed_payloads[url])
+                    )
+
+        if user_uid is not None:
+            for url in new_user_urls:
+                if url in analyzed_payloads:
+                    session.add(
+                        UserLinkAnalysis(user_uid=user_uid, url=url, analysis_json=analyzed_payloads[url])
+                    )
+
         session.commit()
     except Exception:
         session.rollback()
-        logger.exception("Failed to persist link analysis", extra={"order_id": order_id, "user_uid": str(user_uid) if user_uid else None})
+        logger.exception(
+            "Failed to persist link analysis",
+            extra={"order_id": order_id, "user_uid": str(user_uid) if user_uid else None},
+        )
     finally:
         session.close()
 
