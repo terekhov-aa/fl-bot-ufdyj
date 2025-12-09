@@ -38,24 +38,93 @@ async def _analyze_single(url: str) -> dict | None:
 async def analyze_links_and_store(
     urls: Iterable[str], *, order_id: int | None = None, user_uid=None
 ) -> None:
-    unique_urls = merge_links([normalize_url(url) for url in urls])
-    if not unique_urls:
+    if order_id is None and user_uid is None:
         return
 
-    results = await asyncio.gather(*[_analyze_single(url) for url in unique_urls])
+    normalized_urls = [normalize_url(url) for url in urls]
+    new_urls_set = set(merge_links(normalized_urls))
+
     session: Session = SessionLocal()
     try:
-        for url, payload in zip(unique_urls, results):
-            if payload is None:
-                continue
-            if order_id is not None:
-                session.add(OrderLinkAnalysis(order_id=order_id, url=url, analysis_json=payload))
-            if user_uid is not None:
-                session.add(UserLinkAnalysis(user_uid=user_uid, url=url, analysis_json=payload))
+        existing_order_urls: set[str] = set()
+        existing_user_urls: set[str] = set()
+
+        if order_id is not None:
+            existing_order_urls = {
+                row.url
+                for row in session.query(OrderLinkAnalysis)
+                .filter_by(order_id=order_id)
+                .all()
+            }
+        if user_uid is not None:
+            existing_user_urls = {
+                row.url
+                for row in session.query(UserLinkAnalysis)
+                .filter_by(user_uid=user_uid)
+                .all()
+            }
+
+        urls_to_add_order = new_urls_set - existing_order_urls if order_id is not None else set()
+        urls_to_delete_order = existing_order_urls - new_urls_set if order_id is not None else set()
+
+        urls_to_add_user = new_urls_set - existing_user_urls if user_uid is not None else set()
+        urls_to_delete_user = existing_user_urls - new_urls_set if user_uid is not None else set()
+
+        urls_to_analyze = urls_to_add_order | urls_to_add_user
+        analysis_by_url: dict[str, dict] = {}
+        if urls_to_analyze:
+            urls_to_analyze_list = list(urls_to_analyze)
+            results = await asyncio.gather(*[_analyze_single(url) for url in urls_to_analyze_list])
+            analysis_by_url = {
+                url: payload
+                for url, payload in zip(urls_to_analyze_list, results)
+                if payload is not None
+            }
+
+        if order_id is not None and urls_to_delete_order:
+            (
+                session.query(OrderLinkAnalysis)
+                .filter(
+                    OrderLinkAnalysis.order_id == order_id,
+                    OrderLinkAnalysis.url.in_(urls_to_delete_order),
+                )
+                .delete(synchronize_session=False)
+            )
+        if user_uid is not None and urls_to_delete_user:
+            (
+                session.query(UserLinkAnalysis)
+                .filter(
+                    UserLinkAnalysis.user_uid == user_uid,
+                    UserLinkAnalysis.url.in_(urls_to_delete_user),
+                )
+                .delete(synchronize_session=False)
+            )
+
+        if order_id is not None:
+            for url in urls_to_add_order:
+                payload = analysis_by_url.get(url)
+                if payload is None:
+                    continue
+                session.add(
+                    OrderLinkAnalysis(order_id=order_id, url=url, analysis_json=payload)
+                )
+
+        if user_uid is not None:
+            for url in urls_to_add_user:
+                payload = analysis_by_url.get(url)
+                if payload is None:
+                    continue
+                session.add(
+                    UserLinkAnalysis(user_uid=user_uid, url=url, analysis_json=payload)
+                )
+
         session.commit()
     except Exception:
         session.rollback()
-        logger.exception("Failed to persist link analysis", extra={"order_id": order_id, "user_uid": str(user_uid) if user_uid else None})
+        logger.exception(
+            "Failed to persist link analysis",
+            extra={"order_id": order_id, "user_uid": str(user_uid) if user_uid is not None else None},
+        )
     finally:
         session.close()
 
