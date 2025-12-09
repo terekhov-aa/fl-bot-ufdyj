@@ -4,10 +4,7 @@ import asyncio
 import logging
 from typing import Iterable
 
-import httpx
 from sqlalchemy.orm import Session
-
-from ..config import get_settings
 from ..db import SessionLocal
 from ..models import OrderLinkAnalysis, UserLinkAnalysis
 from ..utils.links import extract_links, merge_links, normalize_url
@@ -16,6 +13,11 @@ logger = logging.getLogger(__name__)
 
 
 async def _analyze_single(url: str) -> dict | None:
+    # Внешний сервис link_analyzer отключён. Ничего не вызываем и ничего не возвращаем.
+    logger.info("Link analyzer disabled, skipping external call", extra={"url": url})
+    return None
+
+    """
     settings = get_settings()
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -33,6 +35,7 @@ async def _analyze_single(url: str) -> dict | None:
     except Exception:
         logger.error("Invalid JSON from link analyzer", extra={"url": url})
         return None
+    """
 
 
 async def analyze_links_and_store(
