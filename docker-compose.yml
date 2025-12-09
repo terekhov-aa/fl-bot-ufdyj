@@ -35,16 +35,16 @@ services:
     depends_on:
       - db
 
-  link-analyzer:
-    build: ./link_analyzer
-    env_file:
-      - .env
-    ports:
-      - "3000:3000"
-    depends_on:
-      - db
-    networks:
-      - default
+  # link-analyzer:
+  #   build: ./link_analyzer
+  #   env_file:
+  #     - .env
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - db
+  #   networks:
+  #     - default
 
   pgadmin:
     image: dpage/pgadmin4
